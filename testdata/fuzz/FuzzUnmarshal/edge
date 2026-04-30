@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("# empty values and unicode\nempty_str = \"\"\nuni = \"caf\\u00E9\"\nemoji_key = \"\\U0001F600\"\nml_basic = \"\"\"\nline one\nline two\"\"\"\nml_literal = '''\nno \\escapes\nhere'''\nneg = -0\npos = +0\ninf_val = inf\nnan_val = nan\nneg_inf = -inf\nlocal_date = 2024-01-01\nlocal_time = 14:30:00\n\"dotted.key\" = true\n")

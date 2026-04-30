@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("title = \"TOML Example\"\nname = \"Tom\"\nage = 30\nenabled = true\npi = 3.14159\n")

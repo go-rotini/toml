@@ -1,0 +1,5 @@
+escape_e = "\e"
+hex_tab = "\x09"
+hex_newline = "\x0A"
+hex_max = "\x7F"
+combined = "hello\e\x09world"

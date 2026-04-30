@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("[server]\nhost = \"localhost\"\nport = 8080\n\n[server.tls]\nenabled = true\n\n[[products]]\nname = \"Hammer\"\nsku = 738594937\ncolor = \"red\"\n\n[[products]]\nname = \"Nail\"\nsku = 284758393\ncolors = [\"gray\", \"black\"]\n\n[metadata]\ninline = { key = \"value\", num = 42 }\nhex = 0xDEADBEEF\noct = 0o755\nbin = 0b11010110\ndt = 1979-05-27T07:32:00Z\n")

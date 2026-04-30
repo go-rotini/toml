@@ -1,0 +1,51 @@
+// Package toml implements TOML 1.1.0 encoding and decoding.
+//
+// The API follows the conventions of [encoding/json]: use [Marshal] and
+// [Unmarshal] for one-shot conversions, [Encoder] and [Decoder] for streaming,
+// and struct field tags to control mapping between TOML keys and Go fields.
+//
+// For low-level AST access, [Parse] returns a [File] containing a [Node] tree
+// that can be inspected, mutated with [Path] queries, and re-serialized with
+// [NodeToBytes].
+//
+// # Struct Tags
+//
+// Struct fields may be annotated with "toml" tags:
+//
+//	type Config struct {
+//	    Name    string `toml:"name"`
+//	    Count   int    `toml:"count,omitempty"`
+//	    Ignored string `toml:"-"`
+//	}
+//
+// The tag format is "keyname,opts" where opts is a comma-separated list of:
+//   - omitempty: omit the field if it has its zero value
+//   - omitzero: omit the field if it has its zero value (explicit alias)
+//   - inline: encode the struct or map as an inline table
+//   - multiline: encode strings as multi-line basic strings
+//   - literal: encode strings as literal (single-quoted) strings
+//   - commented: encode the field as a commented-out line
+//   - hex: encode integers in hexadecimal (0x) format
+//   - octal: encode integers in octal (0o) format
+//   - binary: encode integers in binary (0b) format
+//   - required: return an error during decoding if the key is absent
+//   - default=<value>: set field to <value> during decoding if the key is absent
+//     (requires [WithDefaults]; scalar types only)
+//
+// A tag of "-" excludes the field from encoding and decoding.
+//
+// # Custom Marshalers
+//
+// Types can implement [Marshaler], [BytesMarshaler], [MarshalerContext],
+// [Unmarshaler], [BytesUnmarshaler], or [UnmarshalerContext] for custom
+// serialization logic.
+//
+// # Error Handling
+//
+// Decoding errors are returned as typed values that support [errors.Is]:
+//
+//	if errors.Is(err, toml.ErrSyntax) { ... }
+//	if errors.Is(err, toml.ErrDuplicateKey) { ... }
+//
+// Use [FormatError] to produce a human-readable error with a source pointer.
+package toml

@@ -1,0 +1,9 @@
+# Leading zeros in exponents are allowed in TOML 1.1.0
+exp_leading_zero = 1e06
+exp_negative_leading_zero = 1e-03
+exp_positive_leading_zero = 1e+09
+
+# Leading zeros in prefixed integers are allowed in TOML 1.1.0
+hex_leading = 0x00ff
+oct_leading = 0o0777
+bin_leading = 0b00001111

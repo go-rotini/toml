@@ -1,0 +1,58 @@
+baseURL = "https://example.com/"
+languageCode = "en-us"
+title = "My Hugo Site"
+theme = "ananke"
+paginate = 10
+enableRobotsTXT = true
+enableGitInfo = true
+copyright = "© 2024 Example Inc."
+
+[params]
+description = "A sample Hugo site"
+favicon = "/favicon.ico"
+custom_css = ["css/custom.css"]
+show_reading_time = true
+mainSections = ["posts", "articles"]
+
+[params.social]
+github = "https://github.com/example"
+twitter = "https://twitter.com/example"
+mastodon = "https://mastodon.social/@example"
+
+[markup]
+defaultMarkdownHandler = "goldmark"
+
+[markup.goldmark]
+[markup.goldmark.renderer]
+unsafe = false
+
+[markup.highlight]
+style = "monokai"
+lineNos = true
+lineNumbersInTable = true
+
+[menu]
+[[menu.main]]
+name = "Home"
+url = "/"
+weight = 1
+
+[[menu.main]]
+name = "Posts"
+url = "/posts/"
+weight = 2
+
+[[menu.main]]
+name = "About"
+url = "/about/"
+weight = 3
+
+[outputs]
+home = ["HTML", "RSS", "JSON"]
+section = ["HTML", "RSS"]
+taxonomy = ["HTML"]
+term = ["HTML"]
+
+[taxonomies]
+tag = "tags"
+category = "categories"
