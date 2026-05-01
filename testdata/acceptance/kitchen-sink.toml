@@ -1,0 +1,68 @@
+# A configuration that exercises every TOML 1.1.0 feature.
+
+title = "Kitchen Sink Config"
+multiline_description = """
+This document is intentionally
+broad to cover every TOML type."""
+literal_path = 'C:\Users\example\config.toml'
+multiline_literal = '''
+unescaped \n stays literal
+'''
+
+[meta]
+schema_version = 2
+percent_complete = 99.5
+ratio = 1.5e-3
+total = 1_000_000
+hex_value = 0xDEADBEEF
+octal_value = 0o755
+binary_value = 0b1010_1010
+enabled = true
+disabled = false
+
+[meta.timestamps]
+created_offset = 1979-05-27T07:32:00-08:00
+updated_utc = 1979-05-27T07:32:00Z
+local_dt = 1979-05-27T07:32:00.999
+local_d = 1979-05-27
+local_t = 07:32:00.5
+
+[server]
+host = "localhost"
+port = 8080
+timeout = "30s"
+
+[server.tls]
+cert = "/etc/cert.pem"
+key = "/etc/key.pem"
+
+[[server.endpoints]]
+path = "/health"
+method = "GET"
+
+[[server.endpoints]]
+path = "/metrics"
+method = "GET"
+
+[[server.endpoints]]
+path = "/api"
+method = "POST"
+
+[features]
+flags = ["alpha", "beta", "gamma"]
+priorities = [1, 2, 3, 4, 5]
+matrix = [[1, 2], [3, 4], [5, 6]]
+mixed_inline = { name = "default", count = 0, ratio = 0.5 }
+
+[binary_data]
+# base64-encoded "hello world"
+payload = "aGVsbG8gd29ybGQ="
+
+[locales]
+en-US = "English"
+fr-FR = "French"
+"key.with.dots" = "quoted dotted"
+123 = "numeric key"
+
+[deeply.nested.config.value]
+final = "leaf"
