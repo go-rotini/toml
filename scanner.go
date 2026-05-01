@@ -208,6 +208,9 @@ func (s *scanner) scanTableHeader() error {
 
 func (s *scanner) scanTableKey() error {
 	for {
+		if s.atEnd() {
+			return s.syntaxError("expected key")
+		}
 		ch := s.peek()
 		switch ch {
 		case '"':
@@ -724,7 +727,7 @@ func (s *scanner) scanNumberFrom(start int, hasSigned bool) error {
 	}
 
 	ch := s.peek()
-	if ch == '-' && len(digitsOnly) == 4 || (len(digitsOnly) == 5 && (digitsOnly[0] == '+' || digitsOnly[0] == '-')) {
+	if ch == '-' && (len(digitsOnly) == 4 || (len(digitsOnly) == 5 && (digitsOnly[0] == '+' || digitsOnly[0] == '-'))) {
 		return s.scanDateTime(start)
 	}
 	if ch == ':' && len(digitsOnly) == 2 {

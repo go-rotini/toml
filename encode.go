@@ -288,6 +288,17 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		return nil
 	}
 
+	if rv.Kind() == reflect.Struct && isScalarStruct(rv.Type()) {
+		if m, ok := rv.Interface().(encoding.TextMarshaler); ok {
+			text, err := m.MarshalText()
+			if err != nil {
+				return err
+			}
+			e.buf.Write(text)
+			return nil
+		}
+	}
+
 	if rv.CanInterface() {
 		iface := rv.Interface()
 		if m, ok := iface.(MarshalerContext); ok {
