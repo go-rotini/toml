@@ -931,15 +931,16 @@ func (s *scanner) scanLocalTime(start int) error {
 		if err := s.expectDigits(2); err != nil {
 			return err
 		}
-	}
-	// Fractional seconds
-	if !s.atEnd() && s.peek() == '.' {
-		s.advance()
-		if s.atEnd() || s.peek() < '0' || s.peek() > '9' {
-			return s.syntaxError("expected digit in fractional seconds")
-		}
-		for !s.atEnd() && s.peek() >= '0' && s.peek() <= '9' {
+
+		// Fractional seconds (only valid when seconds are present)
+		if !s.atEnd() && s.peek() == '.' {
 			s.advance()
+			if s.atEnd() || s.peek() < '0' || s.peek() > '9' {
+				return s.syntaxError("expected digit in fractional seconds")
+			}
+			for !s.atEnd() && s.peek() >= '0' && s.peek() <= '9' {
+				s.advance()
+			}
 		}
 	}
 	s.emit(tokenLocalTime, string(s.src[start:s.pos]))
