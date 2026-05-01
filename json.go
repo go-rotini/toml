@@ -16,7 +16,11 @@ func ToJSON(tomlData []byte) ([]byte, error) {
 	if err := Unmarshal(tomlData, &m); err != nil {
 		return nil, err
 	}
-	return json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("toml: json marshal: %w", err)
+	}
+	return b, nil
 }
 
 // FromJSON converts JSON data to TOML.
@@ -25,7 +29,7 @@ func FromJSON(jsonData []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(jsonData))
 	dec.UseNumber()
 	if err := dec.Decode(&m); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("toml: json decode: %w", err)
 	}
 	converted := convertJSONValues(m)
 	if conv, ok := converted.(map[string]any); ok {
@@ -70,7 +74,10 @@ func marshalJSONValue(v any) string {
 	case nil:
 		return `""`
 	case string:
-		b, _ := json.Marshal(val)
+		b, err := json.Marshal(val)
+		if err != nil {
+			return `""`
+		}
 		return string(b)
 	case bool:
 		if val {

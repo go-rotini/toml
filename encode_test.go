@@ -988,19 +988,6 @@ func TestEncodeBytesMarshaler(t *testing.T) {
 	}
 }
 
-// testMarshalerCtx implements MarshalerContext. Note: isTableValue does not
-// check for MarshalerContext, so this struct is treated as a table when used
-// as a struct field. We test it through a map value context where encodeValue
-// is reached directly.
-type testMarshalerCtx struct {
-	key string
-}
-
-func (m testMarshalerCtx) MarshalTOML(ctx context.Context) (any, error) {
-	prefix, _ := ctx.Value(m.key).(string)
-	return prefix + ":contextual", nil
-}
-
 func TestEncodeMarshalerContextViaMap(t *testing.T) {
 	// MarshalerContext on a struct type is not detected by isTableValue,
 	// so it gets treated as a sub-table when used as a struct field.

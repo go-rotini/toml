@@ -95,7 +95,7 @@ func (t *LocalTime) UnmarshalText(data []byte) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("toml: invalid local time %q", data)
+	return fmt.Errorf("%w: %q", errInvalidLocalTime, data)
 }
 
 // LocalDateTime represents a date and time without a timezone, as
@@ -139,7 +139,7 @@ func (dt *LocalDateTime) UnmarshalText(data []byte) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("toml: invalid local date-time %q", data)
+	return fmt.Errorf("%w: %q", errInvalidLocalDateTime, data)
 }
 
 // AsTime converts the local date-time to a [time.Time] in the given location.

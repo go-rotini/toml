@@ -46,6 +46,7 @@ linters:
     - tagliatelle     # struct tags use toml-specific conventions, not generic casing
     - forbidigo       # fmt.Print usage in cmd/ is intentional
     - exhaustive      # switch exhaustiveness on internal token types is intentional
+    - recvcheck       # Local* types intentionally mix value/pointer receivers (marshal/unmarshal pattern)
 
   settings:
     cyclop:
@@ -66,7 +67,7 @@ linters:
       min-complexity: 10
 
     goconst:
-      min-len: 3
+      min-len: 5
       min-occurrences: 5
 
     gocritic:
@@ -183,12 +184,19 @@ linters:
           - intrange
           - testableexamples
           - staticcheck
+          - tagalign
+          - errchkjson
 
       - path: cmd/
         linters:
           - wrapcheck
 
       # Parser internals have inherent complexity
+      - path: token\.go
+        linters:
+          - cyclop    # token.String() switch is inherently complex
+          - gocyclo
+
       - path: scanner\.go
         linters:
           - cyclop

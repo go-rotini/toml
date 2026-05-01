@@ -83,14 +83,15 @@ func PathString(expr string) (*Path, error) {
 	p := &Path{raw: expr}
 	rest := expr[1:]
 
-	for len(rest) > 0 {
-		if rest[0] == '.' {
+	for rest != "" {
+		switch rest[0] {
+		case '.':
 			rest = rest[1:]
-			if len(rest) == 0 {
+			if rest == "" {
 				return nil, fmt.Errorf("%w: trailing dot", ErrPathSyntax)
 			}
-			if rest[0] == '.' {
-				// Recursive descent
+			switch rest[0] {
+			case '.':
 				rest = rest[1:]
 				end := indexOfAny(rest, ".[")
 				if end < 0 {
@@ -102,10 +103,10 @@ func PathString(expr string) (*Path, error) {
 				}
 				p.segments = append(p.segments, recursiveSegment{key: key})
 				rest = rest[end:]
-			} else if rest[0] == '*' {
+			case '*':
 				p.segments = append(p.segments, wildcardSegment{})
 				rest = rest[1:]
-			} else {
+			default:
 				end := indexOfAny(rest, ".[")
 				if end < 0 {
 					end = len(rest)
@@ -117,7 +118,7 @@ func PathString(expr string) (*Path, error) {
 				p.segments = append(p.segments, keySegment{key: key})
 				rest = rest[end:]
 			}
-		} else if rest[0] == '[' {
+		case '[':
 			end := strings.IndexByte(rest, ']')
 			if end < 0 {
 				return nil, fmt.Errorf("%w: unclosed [", ErrPathSyntax)
@@ -129,7 +130,7 @@ func PathString(expr string) (*Path, error) {
 			}
 			p.segments = append(p.segments, indexSegment{index: idx})
 			rest = rest[end+1:]
-		} else {
+		default:
 			return nil, fmt.Errorf("%w: unexpected character %q", ErrPathSyntax, rest[0])
 		}
 	}
@@ -188,7 +189,7 @@ func (p *Path) ReadPositions(n *Node) ([]Position, error) {
 }
 
 // Replace replaces the first matching node with the given replacement.
-func (p *Path) Replace(n *Node, replacement *Node) error {
+func (p *Path) Replace(n, replacement *Node) error {
 	if len(p.segments) == 0 {
 		return ErrPathNotFound
 	}
@@ -220,7 +221,7 @@ func (p *Path) Replace(n *Node, replacement *Node) error {
 }
 
 // Append adds a child node to the first matching node.
-func (p *Path) Append(n *Node, value *Node) error {
+func (p *Path) Append(n, value *Node) error {
 	nodes, err := p.Read(n)
 	if err != nil {
 		return err
@@ -268,7 +269,7 @@ func (p *Path) String() string {
 	return p.raw
 }
 
-func indexOfAny(s string, chars string) int {
+func indexOfAny(s, chars string) int {
 	for i, ch := range s {
 		if strings.ContainsRune(chars, ch) {
 			return i

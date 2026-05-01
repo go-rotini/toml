@@ -53,7 +53,7 @@ func normalizeCRLF(src []byte) ([]byte, error) {
 	}
 	buf := make([]byte, 0, len(src))
 	line := 1
-	for i := 0; i < len(src); i++ {
+	for i := range src {
 		if src[i] == '\r' {
 			if i+1 < len(src) && src[i+1] == '\n' {
 				continue
@@ -209,12 +209,12 @@ func (s *scanner) scanTableHeader() error {
 func (s *scanner) scanTableKey() error {
 	for {
 		ch := s.peek()
-		switch {
-		case ch == '"':
+		switch ch {
+		case '"':
 			if err := s.scanBasicString(); err != nil {
 				return err
 			}
-		case ch == '\'':
+		case '\'':
 			if err := s.scanLiteralString(); err != nil {
 				return err
 			}
@@ -242,10 +242,10 @@ func (s *scanner) scanTableKey() error {
 
 func (s *scanner) scanKey() error {
 	ch := s.peek()
-	switch {
-	case ch == '"':
+	switch ch {
+	case '"':
 		return s.scanBasicString()
-	case ch == '\'':
+	case '\'':
 		return s.scanLiteralString()
 	default:
 		return s.scanBareKey()
@@ -261,7 +261,7 @@ func (s *scanner) scanBareKey() error {
 		}
 		if isBareKeyChar(r) {
 			s.pos += size
-			s.col += 1
+			s.col++
 		} else {
 			break
 		}
@@ -1034,11 +1034,11 @@ func isControlChar(r rune) bool {
 
 func checkLeadingZeros(digits string) error {
 	d := digits
-	if len(d) > 0 && (d[0] == '+' || d[0] == '-') {
+	if d != "" && (d[0] == '+' || d[0] == '-') {
 		d = d[1:]
 	}
 	if len(d) > 1 && d[0] == '0' {
-		return fmt.Errorf("leading zeros are not allowed in decimal integers")
+		return errLeadingZeros
 	}
 	return nil
 }

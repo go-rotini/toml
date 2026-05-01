@@ -3,6 +3,7 @@ package toml
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 )
 
@@ -58,7 +59,9 @@ func (enc *Encoder) EncodeContext(ctx context.Context, v any) error {
 // Encode call writes completely.
 func (enc *Encoder) Close() error {
 	if f, ok := enc.w.(interface{ Flush() error }); ok {
-		return f.Flush()
+		if err := f.Flush(); err != nil {
+			return fmt.Errorf("toml: flush: %w", err)
+		}
 	}
 	return nil
 }

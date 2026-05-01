@@ -31,10 +31,9 @@ type MarshalerContext interface {
 }
 
 type encoder struct {
-	opts    *encoderOptions
-	buf     bytes.Buffer
-	ctx     context.Context
-	keyPath []string
+	opts *encoderOptions
+	buf  bytes.Buffer
+	ctx  context.Context
 }
 
 func newEncoder(opts *encoderOptions) *encoder {
@@ -83,7 +82,7 @@ func (e *encoder) encodeTable(rv reflect.Value, path []string) error {
 	case reflect.Map:
 		return e.encodeMap(rv, path)
 	default:
-		return fmt.Errorf("toml: cannot encode %s as table", rv.Kind())
+		return fmt.Errorf("%w: %s", errUnsupportedEncodeType, rv.Kind())
 	}
 }
 
@@ -361,7 +360,9 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		if fn, ok := e.opts.customMarshalers[rv.Type()]; ok {
 			result := reflect.ValueOf(fn).Call([]reflect.Value{rv})
 			if !result[1].IsNil() {
-				return result[1].Interface().(error)
+				if err, ok := result[1].Interface().(error); ok {
+					return err
+				}
 			}
 			e.buf.Write(result[0].Bytes())
 			return nil
@@ -380,7 +381,7 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		}
 		return nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if rv.Type() == reflect.TypeOf(time.Duration(0)) {
+		if rv.Type() == reflect.TypeFor[time.Duration]() {
 			e.encodeString(time.Duration(rv.Int()).String(), fi)
 			return nil
 		}
@@ -410,7 +411,7 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		}
 		return e.encodeInlineMap(rv)
 	default:
-		return fmt.Errorf("toml: unsupported type %s", rv.Type())
+		return fmt.Errorf("%w: %s", errUnsupportedFieldType, rv.Type())
 	}
 }
 
@@ -609,7 +610,7 @@ func (e *encoder) emitNode(n *node, path []string) {
 
 func (e *encoder) emitKeyValue(n *node, _ []string) {
 	if n.headComment != "" {
-		for _, line := range strings.Split(n.headComment, "\n") {
+		for line := range strings.SplitSeq(n.headComment, "\n") {
 			e.buf.WriteString("# ")
 			e.buf.WriteString(line)
 			e.buf.WriteByte('\n')
@@ -775,12 +776,12 @@ func isTableValue(rv reflect.Value) bool {
 	}
 	switch rv.Kind() {
 	case reflect.Struct:
-		if rv.Type() == reflect.TypeOf(time.Time{}) ||
-			rv.Type() == reflect.TypeOf(LocalDate{}) ||
-			rv.Type() == reflect.TypeOf(LocalTime{}) ||
-			rv.Type() == reflect.TypeOf(LocalDateTime{}) ||
-			rv.Type() == reflect.TypeOf(big.Int{}) ||
-			rv.Type() == reflect.TypeOf(big.Float{}) {
+		if rv.Type() == reflect.TypeFor[time.Time]() ||
+			rv.Type() == reflect.TypeFor[LocalDate]() ||
+			rv.Type() == reflect.TypeFor[LocalTime]() ||
+			rv.Type() == reflect.TypeFor[LocalDateTime]() ||
+			rv.Type() == reflect.TypeFor[big.Int]() ||
+			rv.Type() == reflect.TypeFor[big.Float]() {
 			return false
 		}
 		if _, ok := rv.Interface().(encoding.TextMarshaler); ok {
@@ -819,12 +820,12 @@ func isTableValue(rv reflect.Value) bool {
 }
 
 func isScalarStruct(t reflect.Type) bool {
-	return t == reflect.TypeOf(time.Time{}) ||
-		t == reflect.TypeOf(LocalDate{}) ||
-		t == reflect.TypeOf(LocalTime{}) ||
-		t == reflect.TypeOf(LocalDateTime{}) ||
-		t == reflect.TypeOf(big.Int{}) ||
-		t == reflect.TypeOf(big.Float{})
+	return t == reflect.TypeFor[time.Time]() ||
+		t == reflect.TypeFor[LocalDate]() ||
+		t == reflect.TypeFor[LocalTime]() ||
+		t == reflect.TypeFor[LocalDateTime]() ||
+		t == reflect.TypeFor[big.Int]() ||
+		t == reflect.TypeFor[big.Float]()
 }
 
 func isEmpty(rv reflect.Value) bool {
@@ -926,8 +927,7 @@ func encodeBase64(data []byte) string {
 		if i+2 < len(data) {
 			b2 = data[i+2]
 		}
-		buf = append(buf, enc[b0>>2])
-		buf = append(buf, enc[(b0&0x03)<<4|b1>>4])
+		buf = append(buf, enc[b0>>2], enc[(b0&0x03)<<4|b1>>4])
 		if i+1 < len(data) {
 			buf = append(buf, enc[(b1&0x0f)<<2|b2>>6])
 		} else {

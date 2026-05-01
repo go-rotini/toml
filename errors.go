@@ -206,10 +206,14 @@ var (
 )
 
 var (
-	errConflictingFields      = errors.New("conflicting field names")
-	errNotBool                = errors.New("invalid boolean value")
-	errNotTime                = errors.New("invalid time value")
-	errOddChildren            = errors.New("odd number of mapping children")
+	errNonPointerTarget       = errors.New("toml: non-pointer target")
+	errUnsupportedKeyType     = errors.New("toml: cannot set key type")
+	errInvalidBase64Char      = errors.New("invalid base64 character")
+	errUnsupportedEncodeType  = errors.New("toml: cannot encode as table")
+	errUnsupportedFieldType   = errors.New("toml: unsupported type")
+	errLeadingZeros           = errors.New("leading zeros are not allowed in decimal integers")
+	errInvalidLocalTime       = errors.New("toml: invalid local time")
+	errInvalidLocalDateTime   = errors.New("toml: invalid local date-time")
 	errInvalidBoolDefault     = errors.New("invalid bool default")
 	errInvalidDurationDefault = errors.New("invalid duration default")
 	errInvalidIntDefault      = errors.New("invalid int default")

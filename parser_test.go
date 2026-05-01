@@ -16,20 +16,6 @@ func mustParse(t *testing.T, src string) *Node {
 	return f.Root
 }
 
-// helper: assert Parse returns an error matching the target type.
-func mustError[T error](t *testing.T, src string) T {
-	t.Helper()
-	_, err := Parse([]byte(src))
-	if err == nil {
-		t.Fatalf("Parse(%q): expected error, got nil", src)
-	}
-	var target T
-	if !errors.As(err, &target) {
-		t.Fatalf("Parse(%q): error type = %T, want %T; err = %v", src, err, target, err)
-	}
-	return target
-}
-
 // helper: find a KeyValueNode child by key name (non-recursive, one level).
 func findKV(n *Node, key string) *Node {
 	for _, c := range n.Children {

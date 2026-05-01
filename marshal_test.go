@@ -237,11 +237,6 @@ func TestMarshalEncoderEncode(t *testing.T) {
 }
 
 func TestMarshalEncoderEncodeContext(t *testing.T) {
-	type ctxMarshaler struct {
-		key string
-	}
-	// We can't use a custom MarshalerContext here easily without the type assertion
-	// in encode.go, so test that EncodeContext works at the basic level
 	type Config struct {
 		Port int `toml:"port"`
 	}

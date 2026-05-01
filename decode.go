@@ -413,7 +413,9 @@ func (d *decoder) decodeValue(n *node, rv reflect.Value) error {
 			ptr := reflect.New(rv.Type())
 			result := reflect.ValueOf(fn).Call([]reflect.Value{ptr, reflect.ValueOf(raw)})
 			if !result[0].IsNil() {
-				return result[0].Interface().(error)
+				if err, ok := result[0].Interface().(error); ok {
+					return err
+				}
 			}
 			rv.Set(ptr.Elem())
 			return nil
@@ -465,7 +467,7 @@ func (d *decoder) decodeString(s string, rv reflect.Value) error {
 			d.typeErrors = append(d.typeErrors, fmt.Sprintf("cannot decode string into %s", rv.Type()))
 		}
 	case reflect.Int64:
-		if rv.Type() == reflect.TypeOf(time.Duration(0)) {
+		if rv.Type() == reflect.TypeFor[time.Duration]() {
 			dur, err := time.ParseDuration(s)
 			if err != nil {
 				d.typeErrors = append(d.typeErrors, fmt.Sprintf("cannot parse duration %q: %v", s, err))
@@ -528,7 +530,7 @@ func (d *decoder) decodeInteger(s string, rv reflect.Value, pos Position) error 
 	case reflect.Interface:
 		rv.Set(reflect.ValueOf(i64))
 	default:
-		if rv.Type() == reflect.TypeOf((*big.Int)(nil)) {
+		if rv.Type() == reflect.TypeFor[*big.Int]() {
 			bi := new(big.Int)
 			bi.SetInt64(i64)
 			rv.Set(reflect.ValueOf(bi))
@@ -565,7 +567,7 @@ func (d *decoder) decodeFloat(s string, rv reflect.Value) error {
 	case reflect.Interface:
 		rv.Set(reflect.ValueOf(f))
 	default:
-		if rv.Type() == reflect.TypeOf((*big.Float)(nil)) {
+		if rv.Type() == reflect.TypeFor[*big.Float]() {
 			bf := new(big.Float).SetFloat64(f)
 			rv.Set(reflect.ValueOf(bf))
 			return nil
@@ -600,7 +602,7 @@ func (d *decoder) decodeDateTime(s string, rv reflect.Value) error {
 	}
 
 	switch {
-	case rv.Type() == reflect.TypeOf(time.Time{}):
+	case rv.Type() == reflect.TypeFor[time.Time]():
 		rv.Set(reflect.ValueOf(t))
 	case rv.Kind() == reflect.Interface:
 		rv.Set(reflect.ValueOf(t))
@@ -614,14 +616,14 @@ func (d *decoder) decodeLocalDateTime(s string, rv reflect.Value) error {
 	s = normalizeDateTimeSeparators(s)
 
 	switch {
-	case rv.Type() == reflect.TypeOf(LocalDateTime{}):
+	case rv.Type() == reflect.TypeFor[LocalDateTime]():
 		var ldt LocalDateTime
 		if err := ldt.UnmarshalText([]byte(s)); err != nil {
 			d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local datetime %q: %v", s, err))
 			return nil
 		}
 		rv.Set(reflect.ValueOf(ldt))
-	case rv.Type() == reflect.TypeOf(time.Time{}):
+	case rv.Type() == reflect.TypeFor[time.Time]():
 		layouts := []string{
 			"2006-01-02T15:04:05.999999999",
 			"2006-01-02T15:04:05",
@@ -648,14 +650,14 @@ func (d *decoder) decodeLocalDateTime(s string, rv reflect.Value) error {
 
 func (d *decoder) decodeLocalDate(s string, rv reflect.Value) error {
 	switch {
-	case rv.Type() == reflect.TypeOf(LocalDate{}):
+	case rv.Type() == reflect.TypeFor[LocalDate]():
 		var ld LocalDate
 		if err := ld.UnmarshalText([]byte(s)); err != nil {
 			d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local date %q: %v", s, err))
 			return nil
 		}
 		rv.Set(reflect.ValueOf(ld))
-	case rv.Type() == reflect.TypeOf(time.Time{}):
+	case rv.Type() == reflect.TypeFor[time.Time]():
 		t, err := time.ParseInLocation("2006-01-02", s, d.opts.localTimeZone)
 		if err != nil {
 			d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local date %q: %v", s, err))
@@ -677,7 +679,7 @@ func (d *decoder) decodeLocalDate(s string, rv reflect.Value) error {
 
 func (d *decoder) decodeLocalTime(s string, rv reflect.Value) error {
 	switch {
-	case rv.Type() == reflect.TypeOf(LocalTime{}):
+	case rv.Type() == reflect.TypeFor[LocalTime]():
 		var lt LocalTime
 		if err := lt.UnmarshalText([]byte(s)); err != nil {
 			d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local time %q: %v", s, err))
@@ -774,7 +776,10 @@ func (d *decoder) nodeToInterface(n *node) (any, error) {
 		if err != nil {
 			t, err = time.Parse(time.RFC3339, s)
 		}
-		return t, err
+		if err != nil {
+			return t, fmt.Errorf("toml: %w", err)
+		}
+		return t, nil
 	case nodeLocalDateTime:
 		var ldt LocalDateTime
 		s := normalizeDateTimeSeparators(n.value)
@@ -821,7 +826,11 @@ func (d *decoder) toMapSlice(n *node) MapSlice {
 		if child.kind == nodeKeyValue && len(child.key) > 0 {
 			var val any
 			if len(child.children) > 0 {
-				val, _ = d.nodeToInterface(child.children[0])
+				v, err := d.nodeToInterface(child.children[0])
+				if err != nil {
+					continue
+				}
+				val = v
 			}
 			ms = append(ms, MapItem{Key: child.key[0], Value: val})
 		}
@@ -847,7 +856,7 @@ func (d *decoder) applyDefault(fi fieldInfo, fv reflect.Value) error {
 			return &DefaultError{Field: fi.name, Message: errInvalidBoolDefault.Error()}
 		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if fv.Type() == reflect.TypeOf(time.Duration(0)) {
+		if fv.Type() == reflect.TypeFor[time.Duration]() {
 			dur, err := time.ParseDuration(fi.defaultValue)
 			if err != nil {
 				return &DefaultError{Field: fi.name, Message: errInvalidDurationDefault.Error()}
@@ -881,17 +890,17 @@ func (d *decoder) applyDefault(fi fieldInfo, fv reflect.Value) error {
 func (d *decoder) caseInsensitiveLookup(sf *structFields, key string) int {
 	lower := strings.ToLower(key)
 	for i, fi := range sf.fields {
-		if strings.ToLower(fi.name) == lower {
+		if strings.EqualFold(fi.name, lower) {
 			return i
 		}
 	}
 	return -1
 }
 
-func setInterface(target any, value any) error {
+func setInterface(target, value any) error {
 	rv := reflect.ValueOf(target)
 	if rv.Kind() != reflect.Pointer {
-		return fmt.Errorf("toml: non-pointer target")
+		return errNonPointerTarget
 	}
 	rv = rv.Elem()
 	rv.Set(reflect.ValueOf(value))
@@ -912,7 +921,7 @@ func setTextUnmarshalerKey(rv reflect.Value, key string) error {
 		rv.Set(ptr.Elem())
 		return nil
 	}
-	return fmt.Errorf("toml: cannot set key type %s", rv.Type())
+	return fmt.Errorf("%w: %s", errUnsupportedKeyType, rv.Type())
 }
 
 func nodeRawBytes(n *node) []byte {
@@ -964,7 +973,7 @@ func decodeBase64(s string) ([]byte, error) {
 			if ch == '\n' || ch == '\r' || ch == ' ' {
 				continue
 			}
-			return nil, fmt.Errorf("invalid base64 character %q", ch)
+			return nil, fmt.Errorf("%w: %q", errInvalidBase64Char, ch)
 		}
 		val = val<<6 | uint32(idx)
 		bits += 6

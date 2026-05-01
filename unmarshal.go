@@ -2,6 +2,7 @@ package toml
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 )
@@ -54,7 +55,7 @@ func UnmarshalTo[T any](data []byte, opts ...DecodeOption) (T, error) {
 func DecodeFile(path string, v any, opts ...DecodeOption) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("toml: %w", err)
 	}
 	return UnmarshalWithOptions(data, v, opts...)
 }
@@ -92,7 +93,7 @@ func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 
 	data, err := io.ReadAll(dec.r)
 	if err != nil {
-		return err
+		return fmt.Errorf("toml: %w", err)
 	}
 
 	if dec.opts.maxDocumentSize > 0 && len(data) > dec.opts.maxDocumentSize {
