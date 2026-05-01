@@ -356,9 +356,9 @@ func TestGetStructFieldsDeepWins(t *testing.T) {
 
 func TestGetStructFieldsUnexportedSkipped(t *testing.T) {
 	type Config struct {
-		Name     string `toml:"name"`
-		hidden   string `toml:"hidden"` //nolint:unused
-		Port     int    `toml:"port"`
+		Name   string `toml:"name"`
+		hidden string `toml:"hidden"` //nolint:unused
+		Port   int    `toml:"port"`
 	}
 	sf := getStructFields(reflect.TypeOf(Config{}))
 

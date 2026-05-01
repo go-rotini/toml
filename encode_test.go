@@ -2069,15 +2069,15 @@ func TestEncodeComplexStruct(t *testing.T) {
 		Version: 1,
 		Servers: []Server{
 			{
-				Name: "primary",
-				Tags: []string{"prod", "us-east"},
-				DB:   DB{Host: "db1.example.com", Port: 5432},
+				Name:    "primary",
+				Tags:    []string{"prod", "us-east"},
+				DB:      DB{Host: "db1.example.com", Port: 5432},
 				Logging: Log{Level: "info"},
 			},
 			{
-				Name: "secondary",
-				Tags: []string{"prod", "us-west"},
-				DB:   DB{Host: "db2.example.com", Port: 5432},
+				Name:    "secondary",
+				Tags:    []string{"prod", "us-west"},
+				DB:      DB{Host: "db2.example.com", Port: 5432},
 				Logging: Log{Level: "warn"},
 			},
 		},
@@ -2112,9 +2112,9 @@ func TestWithIndentKeyValues(t *testing.T) {
 		Cert    string `toml:"cert"`
 	}
 	type Server struct {
-		Port int `toml:"port"`
+		Port int    `toml:"port"`
 		Host string `toml:"host"`
-		TLS  TLS `toml:"tls"`
+		TLS  TLS    `toml:"tls"`
 	}
 	type Config struct {
 		Name   string `toml:"name"`
@@ -3141,7 +3141,9 @@ func TestEncodeUintBinaryTag(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEncodeTableNilPointer(t *testing.T) {
-	type Inner struct{ X int `toml:"x"` }
+	type Inner struct {
+		X int `toml:"x"`
+	}
 	type Config struct {
 		Inner *Inner `toml:"inner"`
 	}
@@ -3328,7 +3330,9 @@ func TestEncodeFieldCommentedError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEncodeTableFieldNilPtr(t *testing.T) {
-	type Inner struct{ X int `toml:"x"` }
+	type Inner struct {
+		X int `toml:"x"`
+	}
 	type Config struct {
 		Inner *Inner `toml:"inner"`
 	}
@@ -3368,7 +3372,9 @@ func TestEncodeTableFieldSliceError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEncodeMapPointerTableValue(t *testing.T) {
-	inner := struct{ X int `toml:"x"` }{X: 5}
+	inner := struct {
+		X int `toml:"x"`
+	}{X: 5}
 	m := map[string]any{
 		"ptr": &inner,
 	}

@@ -1524,12 +1524,12 @@ func TestIsControlChar(t *testing.T) {
 	}{
 		{0x00, true},
 		{0x08, true},
-		{0x09, false},  // tab is excluded
-		{0x0A, true},   // LF
+		{0x09, false}, // tab is excluded
+		{0x0A, true},  // LF
 		{0x1F, true},
-		{0x20, false},  // space
-		{0x7E, false},  // tilde
-		{0x7F, true},   // DEL
+		{0x20, false}, // space
+		{0x7E, false}, // tilde
+		{0x7F, true},  // DEL
 		{'a', false},
 	}
 	for _, tt := range tests {

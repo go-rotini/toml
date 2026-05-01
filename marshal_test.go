@@ -828,10 +828,10 @@ func TestMarshalUintVariants(t *testing.T) {
 
 func TestMarshalSpecialCharsInKey(t *testing.T) {
 	m := map[string]any{
-		"normal":       1,
-		"with space":   2,
-		"with.dot":     3,
-		"with\"quote":  4,
+		"normal":        1,
+		"with space":    2,
+		"with.dot":      3,
+		"with\"quote":   4,
 		"with\nnewline": 5,
 	}
 	out, err := Marshal(m)

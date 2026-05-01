@@ -6,22 +6,22 @@ import (
 )
 
 type parser struct {
-	tokens          []token
-	pos             int
-	root            *node
-	current         *node
-	currentPath     string
-	implicit        map[string]bool
-	defined         map[string]bool
-	inline          map[string]bool
-	arrayDefined    map[string]bool
-	staticArrays    map[string]bool
-	dottedImplicit  map[string]bool
-	explicitTables  map[string]bool
-	warnings        []string
-	maxNodes        int
-	nodeCount       int
-	pendingComment  []string
+	tokens         []token
+	pos            int
+	root           *node
+	current        *node
+	currentPath    string
+	implicit       map[string]bool
+	defined        map[string]bool
+	inline         map[string]bool
+	arrayDefined   map[string]bool
+	staticArrays   map[string]bool
+	dottedImplicit map[string]bool
+	explicitTables map[string]bool
+	warnings       []string
+	maxNodes       int
+	nodeCount      int
+	pendingComment []string
 }
 
 func newParser(tokens []token) *parser {
@@ -611,4 +611,3 @@ func displayPath(keys []token) string {
 	}
 	return strings.Join(parts, ".")
 }
-

@@ -22,8 +22,8 @@ temp_targets = { cpu = 79.5, case = 72.0 }
 `
 
 	type Database struct {
-		Enabled     bool       `toml:"enabled"`
-		Ports       []int      `toml:"ports"`
+		Enabled     bool               `toml:"enabled"`
+		Ports       []int              `toml:"ports"`
 		TempTargets map[string]float64 `toml:"temp_targets"`
 	}
 	type Owner struct {

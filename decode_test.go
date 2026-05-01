@@ -3297,7 +3297,7 @@ func TestDecodeInlineTableGenericMap(t *testing.T) {
 
 // These blank identifier assignments ensure the imports are used.
 var (
-	_ = context.Background
-	_ = fmt.Sprintf
+	_                          = context.Background
+	_                          = fmt.Sprintf
 	_ encoding.TextUnmarshaler = (*textKey)(nil)
 )

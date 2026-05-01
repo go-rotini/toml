@@ -27,11 +27,11 @@ func TestTOML11EscapeSequences(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	checks := map[string]string{
-		"escape_e":   "\x1b",
-		"hex_tab":    "\t",
+		"escape_e":    "\x1b",
+		"hex_tab":     "\t",
 		"hex_newline": "\n",
-		"hex_max":    "\x7f",
-		"combined":   "hello\x1b\tworld",
+		"hex_max":     "\x7f",
+		"combined":    "hello\x1b\tworld",
 	}
 	for k, want := range checks {
 		got, ok := m[k].(string)

@@ -69,10 +69,10 @@ const (
 type StringStyle int
 
 const (
-	BasicStyle           StringStyle = iota // double-quoted ("...")
-	MultiLineBasicStyle                     // triple double-quoted ("""...""")
-	LiteralStyle                            // single-quoted ('...')
-	MultiLineLiteralStyle                   // triple single-quoted ('''...''')
+	BasicStyle            StringStyle = iota // double-quoted ("...")
+	MultiLineBasicStyle                      // triple double-quoted ("""...""")
+	LiteralStyle                             // single-quoted ('...')
+	MultiLineLiteralStyle                    // triple single-quoted ('''...''')
 )
 
 // Node is a TOML AST node.
