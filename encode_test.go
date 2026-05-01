@@ -2103,3 +2103,224 @@ func TestEncodeComplexStruct(t *testing.T) {
 		}
 	}
 }
+
+func TestWithIndentKeyValues(t *testing.T) {
+	type TLS struct {
+		Enabled bool   `toml:"enabled"`
+		Cert    string `toml:"cert"`
+	}
+	type Server struct {
+		Port int `toml:"port"`
+		Host string `toml:"host"`
+		TLS  TLS `toml:"tls"`
+	}
+	type Config struct {
+		Name   string `toml:"name"`
+		Server Server `toml:"server"`
+	}
+	cfg := Config{
+		Name: "app",
+		Server: Server{
+			Port: 8080,
+			Host: "localhost",
+			TLS: TLS{
+				Enabled: true,
+				Cert:    "cert.pem",
+			},
+		},
+	}
+	out, err := MarshalWithOptions(cfg, WithIndent(2), WithTableSeparator(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	// Top-level keys have no indent
+	if !strings.Contains(got, "name = \"app\"\n") {
+		t.Errorf("top-level key should not be indented, got:\n%s", got)
+	}
+	// Depth-1 keys indented by 2
+	if !strings.Contains(got, "  port = 8080\n") {
+		t.Errorf("depth-1 key should be indented by 2, got:\n%s", got)
+	}
+	if !strings.Contains(got, "  host = \"localhost\"\n") {
+		t.Errorf("depth-1 key should be indented by 2, got:\n%s", got)
+	}
+	// Depth-2 keys indented by 4
+	if !strings.Contains(got, "    enabled = true\n") {
+		t.Errorf("depth-2 key should be indented by 4, got:\n%s", got)
+	}
+	// Table headers NOT indented (indentTables is false)
+	if !strings.Contains(got, "[server]\n") {
+		t.Errorf("table header should not be indented, got:\n%s", got)
+	}
+	if !strings.Contains(got, "[server.tls]\n") {
+		t.Errorf("sub-table header should not be indented, got:\n%s", got)
+	}
+}
+
+func TestWithIndentTables(t *testing.T) {
+	type Inner struct {
+		Val int `toml:"val"`
+	}
+	type Mid struct {
+		X     int   `toml:"x"`
+		Inner Inner `toml:"inner"`
+	}
+	type Top struct {
+		A   int `toml:"a"`
+		Mid Mid `toml:"mid"`
+	}
+	v := Top{A: 1, Mid: Mid{X: 2, Inner: Inner{Val: 3}}}
+	out, err := MarshalWithOptions(v, WithIndent(2), WithIndentTables(true), WithTableSeparator(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	// Top-level: no indent
+	if !strings.Contains(got, "a = 1\n") {
+		t.Errorf("top-level key should not be indented, got:\n%s", got)
+	}
+	// [mid] header at depth 1: not indented (only depth > 1 gets indented)
+	if !strings.Contains(got, "[mid]\n") {
+		t.Errorf("[mid] header should not be indented, got:\n%s", got)
+	}
+	// mid.x indented by 2
+	if !strings.Contains(got, "  x = 2\n") {
+		t.Errorf("mid.x should be indented by 2, got:\n%s", got)
+	}
+	// [mid.inner] header indented by 2 (depth 2, indent = (2-1)*2 = 2)
+	if !strings.Contains(got, "  [mid.inner]\n") {
+		t.Errorf("[mid.inner] header should be indented by 2, got:\n%s", got)
+	}
+	// mid.inner.val indented by 4
+	if !strings.Contains(got, "    val = 3\n") {
+		t.Errorf("mid.inner.val should be indented by 4, got:\n%s", got)
+	}
+}
+
+func TestWithIndentArrayTable(t *testing.T) {
+	type Server struct {
+		Name string `toml:"name"`
+		Port int    `toml:"port"`
+	}
+	type Config struct {
+		Title   string   `toml:"title"`
+		Servers []Server `toml:"servers"`
+	}
+	cfg := Config{
+		Title: "test",
+		Servers: []Server{
+			{Name: "a", Port: 80},
+			{Name: "b", Port: 443},
+		},
+	}
+	out, err := MarshalWithOptions(cfg, WithIndent(2), WithIndentTables(true), WithTableSeparator(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "  name = ") {
+		t.Errorf("array table entries should be indented, got:\n%s", got)
+	}
+}
+
+func TestWithIndentMap(t *testing.T) {
+	m := map[string]any{
+		"name": "test",
+		"server": map[string]any{
+			"port": int64(8080),
+		},
+	}
+	out, err := MarshalWithOptions(m, WithIndent(4), WithTableSeparator(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "name = \"test\"\n") {
+		t.Errorf("top-level should not be indented, got:\n%s", got)
+	}
+	if !strings.Contains(got, "    port = 8080\n") {
+		t.Errorf("map sub-table values should be indented by 4, got:\n%s", got)
+	}
+}
+
+func TestWithIndentZero(t *testing.T) {
+	type S struct {
+		A int `toml:"a"`
+	}
+	type T struct {
+		X int `toml:"x"`
+		S S   `toml:"s"`
+	}
+	v := T{X: 1, S: S{A: 2}}
+	out, err := MarshalWithOptions(v, WithIndent(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	// With indent 0, no indentation should be applied
+	if strings.Contains(got, "  a =") {
+		t.Errorf("indent 0 should produce no indentation, got:\n%s", got)
+	}
+}
+
+func TestWithIndentComments(t *testing.T) {
+	type Server struct {
+		Port int `toml:"port" comment:"Listen port"`
+	}
+	type Config struct {
+		Server Server `toml:"server"`
+	}
+	cfg := Config{Server: Server{Port: 8080}}
+	out, err := MarshalWithOptions(cfg, WithIndent(2), WithTableSeparator(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "  # Listen port\n") {
+		t.Errorf("comment should be indented, got:\n%s", got)
+	}
+	if !strings.Contains(got, "  port = 8080\n") {
+		t.Errorf("key should be indented, got:\n%s", got)
+	}
+}
+
+func TestWithIndentCommented(t *testing.T) {
+	type Config struct {
+		Debug int `toml:"debug,commented" comment:"Enable debug"`
+	}
+	cfg := Config{Debug: 1}
+	out, err := MarshalWithOptions(cfg, WithIndent(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	// At indent 0, commented fields should work as before
+	if !strings.Contains(got, "# Enable debug\n# debug = 1\n") {
+		t.Errorf("commented field should work at indent 0, got:\n%s", got)
+	}
+}
+
+func TestWithIndentWithComment(t *testing.T) {
+	type Server struct {
+		Port int `toml:"port"`
+	}
+	type Config struct {
+		Server Server `toml:"server"`
+	}
+	cfg := Config{Server: Server{Port: 8080}}
+	out, err := MarshalWithOptions(cfg,
+		WithIndent(2),
+		WithTableSeparator(false),
+		WithComment(map[string][]Comment{
+			"server.port": {{Position: HeadCommentPos, Text: "Server port"}},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "  # Server port\n") {
+		t.Errorf("WithComment should be indented, got:\n%s", got)
+	}
+}

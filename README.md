@@ -1,68 +1,8 @@
 # toml
 
-A pure Go implementation of [TOML 1.1.0](https://toml.io/en/v1.1.0) with zero runtime dependencies.
+A Go TOML encoding and decoding package that implements the [TOML 1.1.0 specification](https://toml.io/en/v1.1.0) backed by the [TOML Test Suite]() conformance tests.
 
-Part of the [go-rotini](https://github.com/go-rotini) CLI framework.
-
-## Installation
-
-```
-go get github.com/go-rotini/toml
-```
-
-Requires Go 1.23 or later.
-
-## Quick Start
-
-```go
-package main
-
-import (
-    "fmt"
-    "github.com/go-rotini/toml"
-)
-
-type Config struct {
-    Title    string   `toml:"title"`
-    Owner    Owner    `toml:"owner"`
-    Database Database `toml:"database"`
-}
-
-type Owner struct {
-    Name string `toml:"name"`
-}
-
-type Database struct {
-    Ports   []int  `toml:"ports"`
-    Enabled bool   `toml:"enabled"`
-    ConnMax int    `toml:"connection_max"`
-}
-
-func main() {
-    input := `
-title = "Example"
-
-[owner]
-name = "Alice"
-
-[database]
-ports = [8000, 8001, 8002]
-enabled = true
-connection_max = 5000
-`
-    var cfg Config
-    if err := toml.Unmarshal([]byte(input), &cfg); err != nil {
-        panic(err)
-    }
-    fmt.Println(cfg.Title)  // Example
-    fmt.Println(cfg.Owner.Name)  // Alice
-    fmt.Println(cfg.Database.Ports)  // [8000 8001 8002]
-
-    // Marshal back to TOML
-    out, _ := toml.Marshal(cfg)
-    fmt.Println(string(out))
-}
-```
+This package is used as the default TOML support package for [rotini](https://github.com/go-rotini/rotini).
 
 ## Features
 
@@ -85,103 +25,83 @@ connection_max = 5000
 - **Deferred decoding** — `RawValue` for lazy unmarshaling
 - **File decoding** — `DecodeFile()` reads directly from disk
 
-## Struct Tags
+## Installation
 
-```go
-type Example struct {
-    Name     string `toml:"name"`
-    Count    int    `toml:"count,omitempty"`
-    Ignored  string `toml:"-"`
-    Debug    int    `toml:"debug,commented"`
-    Port     int    `toml:"port,required"`
-    Timeout  int    `toml:"timeout,default=30"`
-    ID       int    `toml:"id,hex"`
-    Perms    int    `toml:"perms,octal"`
-    Flags    int    `toml:"flags,binary"`
-    Desc     string `toml:"desc,multiline"`
-    Path     string `toml:"path,literal"`
-    Settings Inner  `toml:"settings,inline"`
-}
+```bash
+go get github.com/go-rotini/toml
 ```
 
-Comments can be attached via a separate `comment` tag:
+Requires Go 1.23 or later.
+
+## Quick Start
 
 ```go
+package main
+
+import (
+	"fmt"
+	"github.com/go-rotini/toml"
+)
+
 type Config struct {
-    Port int `toml:"port" comment:"Server listen port"`
+	Title    string   `toml:"title"`
+	Owner    Owner    `toml:"owner"`
+	Database Database `toml:"database"`
+}
+
+type Owner struct {
+	Name string `toml:"name"`
+}
+
+type Database struct {
+	Ports   []int `toml:"ports"`
+	Enabled bool  `toml:"enabled"`
+	ConnMax int   `toml:"connection_max"`
+}
+
+func main() {
+    input := `
+title = "Example"
+
+[owner]
+name = "Alice"
+
+[database]
+ports = [8000, 8001, 8002]
+enabled = true
+connection_max = 5000
+`
+	// Unmarshal
+	var cfg Config
+	if err := toml.Unmarshal([]byte(input), &cfg); err != nil {
+		fmt.Fatal(err)
+	}
+	fmt.Println(cfg.Title)
+	fmt.Println(cfg.Owner.Name)
+	fmt.Println(cfg.Database.Ports)
+
+	// Marshal
+	out, _ := toml.Marshal(cfg)
+	fmt.Println(string(out))
 }
 ```
 
-## Decode Options
+## Documentation
 
-```go
-toml.UnmarshalWithOptions(data, &cfg,
-    toml.WithStrict(),            // reject unknown keys
-    toml.WithDefaults(),          // apply default= tag values
-    toml.WithOrderedMap(),        // preserve key order
-    toml.WithMaxDepth(50),        // limit nesting depth
-    toml.WithMaxKeys(10000),      // limit key count
-    toml.WithMaxDocumentSize(1<<20), // limit input size
-    toml.WithValidator(myValidator),
-    toml.WithLocalTimeZone(time.UTC),
-)
-```
+Full API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/go-rotini/toml).
 
-## Encode Options
+## Contributing
 
-```go
-toml.MarshalWithOptions(cfg,
-    toml.WithOmitEmpty(true),
-    toml.WithArrayMultiline(true),
-    toml.WithLiteralString(true),
-    toml.WithTableSeparator(true),
-    toml.WithComment("server.port", toml.Comment{
-        Text:     "Listen port",
-        Position: toml.HeadCommentPos,
-    }),
-)
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
 
-## AST Access
+## Code of Conduct
 
-```go
-f, _ := toml.Parse(data)
+This project follows a code of conduct to ensure a welcoming community. See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-// Walk all nodes
-toml.Walk(f.Root, func(n *toml.Node) bool {
-    fmt.Println(n.Kind, n.Key, n.Value)
-    return true
-})
+## Security
 
-// Path queries
-p, _ := toml.PathString("$.database.ports[0]")
-results, _ := p.Read(f.Root)
-
-// Serialize back
-out, _ := toml.NodeToBytes(f.Root)
-```
-
-## JSON Conversion
-
-```go
-jsonData, _ := toml.ToJSON(tomlData)
-tomlData, _ := toml.FromJSON(jsonData)
-```
-
-## Error Formatting
-
-```go
-var cfg Config
-err := toml.Unmarshal(data, &cfg)
-if err != nil {
-    fmt.Println(toml.FormatError(data, err))
-    // Output:
-    // toml: line 3, column 5: duplicate key "name"
-    //   name = "second"
-    //       ^
-}
-```
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

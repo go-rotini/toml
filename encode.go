@@ -158,7 +158,9 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 	}
 
 	for _, entry := range simples {
+		indent := e.indentPrefix(len(path))
 		e.writeComment(entry.key, path)
+		e.buf.WriteString(indent)
 		e.writeKey(entry.key)
 		e.buf.WriteString(" = ")
 		if err := e.encodeValue(entry.value, fieldInfo{}); err != nil {
@@ -198,13 +200,17 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 }
 
 func (e *encoder) encodeField(fi fieldInfo, fv reflect.Value, path []string) error {
+	indent := e.indentPrefix(len(path))
+
 	if fi.commented {
 		if fi.comment != "" {
+			e.buf.WriteString(indent)
 			e.buf.WriteString("# ")
 			e.buf.WriteString(fi.comment)
 			e.buf.WriteByte('\n')
 		}
 		e.writeComment(fi.name, path)
+		e.buf.WriteString(indent)
 		e.buf.WriteString("# ")
 		e.writeKey(fi.name)
 		e.buf.WriteString(" = ")
@@ -216,12 +222,14 @@ func (e *encoder) encodeField(fi fieldInfo, fv reflect.Value, path []string) err
 	}
 
 	if fi.comment != "" {
+		e.buf.WriteString(indent)
 		e.buf.WriteString("# ")
 		e.buf.WriteString(fi.comment)
 		e.buf.WriteByte('\n')
 	}
 
 	e.writeComment(fi.name, path)
+	e.buf.WriteString(indent)
 	e.writeKey(fi.name)
 	e.buf.WriteString(" = ")
 	if err := e.encodeValue(fv, fi); err != nil {
@@ -255,6 +263,9 @@ func (e *encoder) encodeTableField(fi fieldInfo, fv reflect.Value, path []string
 	}
 
 	if fi.comment != "" {
+		if e.opts.indentTables && len(subPath) > 1 {
+			e.buf.WriteString(e.indentPrefix(len(subPath) - 1))
+		}
 		e.buf.WriteString("# ")
 		e.buf.WriteString(fi.comment)
 		e.buf.WriteByte('\n')
@@ -674,9 +685,19 @@ func (e *encoder) emitValue(n *node) {
 	}
 }
 
+func (e *encoder) indentPrefix(depth int) string {
+	if e.opts.indent <= 0 || depth <= 0 {
+		return ""
+	}
+	return strings.Repeat(" ", depth*e.opts.indent)
+}
+
 func (e *encoder) writeTableHeader(path []string) {
 	if e.opts.tableSeparator && e.buf.Len() > 0 {
 		e.buf.WriteByte('\n')
+	}
+	if e.opts.indentTables && len(path) > 1 {
+		e.buf.WriteString(e.indentPrefix(len(path) - 1))
 	}
 	e.buf.WriteByte('[')
 	for i, p := range path {
@@ -691,6 +712,9 @@ func (e *encoder) writeTableHeader(path []string) {
 func (e *encoder) writeArrayTableHeader(path []string) {
 	if e.opts.tableSeparator && e.buf.Len() > 0 {
 		e.buf.WriteByte('\n')
+	}
+	if e.opts.indentTables && len(path) > 1 {
+		e.buf.WriteString(e.indentPrefix(len(path) - 1))
 	}
 	e.buf.WriteString("[[")
 	for i, p := range path {
@@ -724,8 +748,10 @@ func (e *encoder) writeComment(key string, path []string) {
 	if !ok {
 		return
 	}
+	indent := e.indentPrefix(len(path))
 	for _, c := range comments {
 		if c.Position == HeadCommentPos {
+			e.buf.WriteString(indent)
 			e.buf.WriteString("# ")
 			e.buf.WriteString(c.Text)
 			e.buf.WriteByte('\n')
