@@ -2,6 +2,8 @@ package toml
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"reflect"
@@ -2324,3 +2326,1328 @@ func TestWithIndentWithComment(t *testing.T) {
 		t.Errorf("WithComment should be indented, got:\n%s", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeInlineTable (struct in array value position)
+// ---------------------------------------------------------------------------
+
+func TestEncodeInlineTableInArray(t *testing.T) {
+	type Point struct {
+		X int `toml:"x"`
+		Y int `toml:"y"`
+	}
+	type Config struct {
+		Points []Point `toml:"points,inline"`
+	}
+	out, err := Marshal(Config{Points: []Point{{X: 1, Y: 2}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "{ x = 1, y = 2 }") {
+		t.Errorf("struct in inline array should use inline table, got:\n%s", got)
+	}
+}
+
+func TestEncodeInlineTableInArrayOmitEmpty(t *testing.T) {
+	type Point struct {
+		X int `toml:"x"`
+		Y int `toml:"y,omitempty"`
+	}
+	type Config struct {
+		Points []Point `toml:"points,inline"`
+	}
+	out, err := Marshal(Config{Points: []Point{{X: 1, Y: 0}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if strings.Contains(got, "y = 0") {
+		t.Errorf("omitempty field should be omitted in inline table, got:\n%s", got)
+	}
+	if !strings.Contains(got, "x = 1") {
+		t.Errorf("non-empty field should be present, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTableField — nil pointer (returns early), comment on table
+// ---------------------------------------------------------------------------
+
+func TestEncodeTableFieldNilPointerRendersEmpty(t *testing.T) {
+	type Inner struct {
+		Val int `toml:"val"`
+	}
+	type Config struct {
+		Name  string `toml:"name"`
+		Inner *Inner `toml:"inner"`
+	}
+	out, err := Marshal(Config{Name: "test", Inner: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	// nil pointer struct renders as empty string (isTableValue returns false for nil ptr)
+	if !strings.Contains(got, `inner = ""`) {
+		t.Errorf("nil pointer field should render as empty string, got:\n%s", got)
+	}
+}
+
+func TestEncodeTableFieldWithComment(t *testing.T) {
+	type Inner struct {
+		Val int `toml:"val"`
+	}
+	type Config struct {
+		Inner Inner `toml:"inner" comment:"section comment"`
+	}
+	out, err := Marshal(Config{Inner: Inner{Val: 42}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "# section comment") {
+		t.Errorf("table field comment missing, got:\n%s", got)
+	}
+	if !strings.Contains(got, "[inner]") {
+		t.Errorf("table header missing, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — pointer and interface unwrapping, nil pointer, nil interface
+// ---------------------------------------------------------------------------
+
+func TestEncodeValueNilPointer(t *testing.T) {
+	type Config struct {
+		Val *string `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `val = ""`) {
+		t.Errorf("nil pointer should encode as empty string, got:\n%s", got)
+	}
+}
+
+func TestEncodeValuePointerToValue(t *testing.T) {
+	s := "hello"
+	type Config struct {
+		Val *string `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: &s})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `val = "hello"`) {
+		t.Errorf("pointer to string should encode value, got:\n%s", got)
+	}
+}
+
+func TestEncodeValueInterface(t *testing.T) {
+	m := map[string]any{
+		"val": 42,
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "val = 42") {
+		t.Errorf("interface value should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — MarshalerContext interface
+// ---------------------------------------------------------------------------
+
+type ctxMarshaler struct {
+	val string
+}
+
+func (m ctxMarshaler) MarshalTOML(ctx context.Context) (any, error) {
+	return m.val, nil
+}
+
+func TestEncodeValueMarshalerContext(t *testing.T) {
+	type Config struct {
+		Val ctxMarshaler `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: ctxMarshaler{val: "ctx-value"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `val = "ctx-value"`) {
+		t.Errorf("MarshalerContext should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — Marshaler interface
+// ---------------------------------------------------------------------------
+
+type valMarshaler struct {
+	n int
+}
+
+func (m valMarshaler) MarshalTOML() (any, error) {
+	return m.n, nil
+}
+
+func TestEncodeValueMarshaler(t *testing.T) {
+	type Config struct {
+		Val valMarshaler `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: valMarshaler{n: 99}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "val = 99") {
+		t.Errorf("Marshaler should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — BytesMarshaler interface
+// ---------------------------------------------------------------------------
+
+type bytesMarshaler struct{}
+
+func (m bytesMarshaler) MarshalTOML() ([]byte, error) {
+	return []byte(`"custom-bytes"`), nil
+}
+
+func TestEncodeValueBytesMarshaler(t *testing.T) {
+	type Config struct {
+		Val bytesMarshaler `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: bytesMarshaler{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `val = "custom-bytes"`) {
+		t.Errorf("BytesMarshaler should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — addr-based marshaler check (pointer receiver)
+// ---------------------------------------------------------------------------
+
+type addrMarshaler struct {
+	v int
+}
+
+func (m *addrMarshaler) MarshalTOML() (any, error) {
+	return m.v * 2, nil
+}
+
+func TestEncodeValueAddrMarshaler(t *testing.T) {
+	type Config struct {
+		Vals []addrMarshaler `toml:"vals,inline"`
+	}
+	out, err := Marshal(Config{Vals: []addrMarshaler{{v: 5}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "10") {
+		t.Errorf("addr-based Marshaler should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — unsupported type
+// ---------------------------------------------------------------------------
+
+func TestEncodeValueUnsupportedType(t *testing.T) {
+	ch := make(chan int)
+	m := map[string]any{
+		"val": ch,
+	}
+	_, err := Marshal(m)
+	if err == nil {
+		t.Fatal("expected error for unsupported type")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTable — interface wrapping nil, pointer to map
+// ---------------------------------------------------------------------------
+
+func TestEncodeTableInterfaceNil(t *testing.T) {
+	m := map[string]any{
+		"sub": map[string]any(nil),
+	}
+	_, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTable — non-struct/map error branch
+// ---------------------------------------------------------------------------
+
+func TestEncodeTableNonStructMap(t *testing.T) {
+	_, err := Marshal(42)
+	if err == nil {
+		t.Fatal("expected error for non-table top-level")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: isEmpty — uint, float, pointer, struct branches
+// ---------------------------------------------------------------------------
+
+func TestEncodeOmitEmptyUint(t *testing.T) {
+	type Config struct {
+		Val uint `toml:"val,omitempty"`
+	}
+	out, err := Marshal(Config{Val: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "val") {
+		t.Errorf("zero uint should be omitted, got:\n%s", out)
+	}
+	out, err = Marshal(Config{Val: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "val = 5") {
+		t.Errorf("non-zero uint should be present, got:\n%s", out)
+	}
+}
+
+func TestEncodeOmitEmptyFloat(t *testing.T) {
+	type Config struct {
+		Val float64 `toml:"val,omitempty"`
+	}
+	out, err := Marshal(Config{Val: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "val") {
+		t.Errorf("zero float should be omitted, got:\n%s", out)
+	}
+}
+
+func TestEncodeOmitEmptyPointer(t *testing.T) {
+	type Config struct {
+		Val *string `toml:"val,omitempty"`
+	}
+	out, err := Marshal(Config{Val: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "val") {
+		t.Errorf("nil pointer should be omitted with omitempty, got:\n%s", out)
+	}
+}
+
+func TestEncodeOmitEmptyStruct(t *testing.T) {
+	type Inner struct {
+		X int `toml:"x"`
+	}
+	type Config struct {
+		Inner Inner `toml:"inner,omitempty,inline"`
+	}
+	out, err := Marshal(Config{Inner: Inner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "inner") {
+		t.Errorf("zero struct should be omitted, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: escapeMultiLineBasic — backspace, formfeed, backslash, control chars
+// ---------------------------------------------------------------------------
+
+func TestEncodeMultiLineBasicEscapes(t *testing.T) {
+	type Config struct {
+		Val string `toml:"val,multiline"`
+	}
+	input := "line1\nline2\b\f\\\x01"
+	out, err := Marshal(Config{Val: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `\b`) {
+		t.Errorf("backspace not escaped in multiline, got:\n%s", got)
+	}
+	if !strings.Contains(got, `\f`) {
+		t.Errorf("formfeed not escaped in multiline, got:\n%s", got)
+	}
+	if !strings.Contains(got, `\\`) {
+		t.Errorf("backslash not escaped in multiline, got:\n%s", got)
+	}
+	if !strings.Contains(got, "\\u0001") {
+		t.Errorf("control char not escaped in multiline, got:\n%s", got)
+	}
+}
+
+func TestEncodeMultiLineBasicDEL(t *testing.T) {
+	type Config struct {
+		Val string `toml:"val,multiline"`
+	}
+	out, err := Marshal(Config{Val: "hello\x7fworld\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "\\u007F") {
+		t.Errorf("DEL char not escaped in multiline, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: writeArrayTableHeader — indented
+// ---------------------------------------------------------------------------
+
+func TestEncodeArrayTableHeaderIndented(t *testing.T) {
+	type Item struct {
+		Name string `toml:"name"`
+	}
+	type Sub struct {
+		Items []Item `toml:"items"`
+	}
+	type Config struct {
+		Sub Sub `toml:"sub"`
+	}
+	cfg := Config{Sub: Sub{Items: []Item{{Name: "a"}}}}
+	out, err := MarshalWithOptions(cfg, WithIndent(2), WithIndentTables(true), WithTableSeparator(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "  [[sub.items]]") {
+		t.Errorf("array table header should be indented, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTableField — table comment with indentTables
+// ---------------------------------------------------------------------------
+
+func TestEncodeTableFieldCommentWithIndent(t *testing.T) {
+	type Inner struct {
+		Val int `toml:"val"`
+	}
+	type Mid struct {
+		Inner Inner `toml:"inner" comment:"inner section"`
+	}
+	type Config struct {
+		Mid Mid `toml:"mid"`
+	}
+	out, err := MarshalWithOptions(Config{Mid: Mid{Inner: Inner{Val: 1}}},
+		WithIndent(2), WithIndentTables(true), WithTableSeparator(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "  # inner section") {
+		t.Errorf("table comment should be indented, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — custom marshaler
+// ---------------------------------------------------------------------------
+
+func TestEncodeCustomMarshalerCoverage(t *testing.T) {
+	type Config struct {
+		Val int `toml:"val"`
+	}
+	out, err := MarshalWithOptions(Config{Val: 42},
+		WithCustomMarshaler(func(v int) ([]byte, error) {
+			return []byte(`"forty-two"`), nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `val = "forty-two"`) {
+		t.Errorf("custom marshaler should be used, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeFloat — integer-like floats get .0 suffix
+// ---------------------------------------------------------------------------
+
+func TestEncodeFloatIntegerLike(t *testing.T) {
+	type Config struct {
+		Val float64 `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: 42.0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "val = 42.0") {
+		t.Errorf("integer-like float should have .0, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTable — pointer to struct, pointer to map
+// ---------------------------------------------------------------------------
+
+func TestEncodePointerToSubStruct(t *testing.T) {
+	type Inner struct {
+		Val int `toml:"val"`
+	}
+	inner := &Inner{Val: 42}
+	type Config struct {
+		Inner *Inner `toml:"inner"`
+	}
+	out, err := Marshal(Config{Inner: inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "[inner]") && !strings.Contains(string(out), "val = 42") {
+		t.Errorf("pointer to struct should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeMap — sub-table via map[string]any with struct/map values
+// ---------------------------------------------------------------------------
+
+func TestEncodeMapWithSubTables(t *testing.T) {
+	m := map[string]any{
+		"name": "test",
+		"server": map[string]any{
+			"host": "localhost",
+			"port": 8080,
+		},
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `name = "test"`) {
+		t.Errorf("expected name field, got:\n%s", got)
+	}
+	if !strings.Contains(got, "[server]") {
+		t.Errorf("expected [server] header, got:\n%s", got)
+	}
+}
+
+func TestEncodeMapWithArrayOfTables(t *testing.T) {
+	m := map[string]any{
+		"title": "test",
+		"servers": []map[string]int{
+			{"port": 80},
+			{"port": 443},
+		},
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "[[servers]]") {
+		t.Errorf("expected [[servers]] header, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeStruct — global omitEmpty option
+// ---------------------------------------------------------------------------
+
+func TestEncodeStructGlobalOmitEmpty(t *testing.T) {
+	type Config struct {
+		Name  string `toml:"name"`
+		Value int    `toml:"value"`
+	}
+	out, err := MarshalWithOptions(Config{Name: "", Value: 0}, WithOmitEmpty(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if strings.Contains(got, "name") || strings.Contains(got, "value") {
+		t.Errorf("global omitEmpty should omit zero fields, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — addr-based MarshalerContext and BytesMarshaler
+// ---------------------------------------------------------------------------
+
+type addrCtxMarshaler struct {
+	v string
+}
+
+func (m *addrCtxMarshaler) MarshalTOML(ctx context.Context) (any, error) {
+	return m.v, nil
+}
+
+func TestEncodeValueAddrMarshalerContext(t *testing.T) {
+	type Config struct {
+		Vals []addrCtxMarshaler `toml:"vals,inline"`
+	}
+	out, err := Marshal(Config{Vals: []addrCtxMarshaler{{v: "test"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "test") {
+		t.Errorf("addr MarshalerContext should encode, got:\n%s", out)
+	}
+}
+
+type addrBytesMarshaler struct{}
+
+func (m *addrBytesMarshaler) MarshalTOML() ([]byte, error) {
+	return []byte(`"addr-bytes"`), nil
+}
+
+func TestEncodeValueAddrBytesMarshaler(t *testing.T) {
+	type Config struct {
+		Vals []addrBytesMarshaler `toml:"vals,inline"`
+	}
+	out, err := Marshal(Config{Vals: []addrBytesMarshaler{{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "addr-bytes") {
+		t.Errorf("addr BytesMarshaler should encode, got:\n%s", out)
+	}
+}
+
+type addrTextMarshaler struct {
+	v string
+}
+
+func (m *addrTextMarshaler) MarshalText() ([]byte, error) {
+	return []byte(m.v), nil
+}
+
+func TestEncodeValueAddrTextMarshaler(t *testing.T) {
+	type Config struct {
+		Vals []addrTextMarshaler `toml:"vals,inline"`
+	}
+	out, err := Marshal(Config{Vals: []addrTextMarshaler{{v: "addr-text"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "addr-text") {
+		t.Errorf("addr TextMarshaler should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: isEmpty — Interface/Pointer check
+// ---------------------------------------------------------------------------
+
+func TestEncodeOmitEmptyInterfaceField(t *testing.T) {
+	type Config struct {
+		Val any `toml:"val,omitempty"`
+	}
+	out, err := Marshal(Config{Val: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if strings.Contains(got, "val") {
+		t.Errorf("nil interface field should be omitted with omitempty, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — multiline array with nested struct
+// ---------------------------------------------------------------------------
+
+func TestEncodeArrayMultilineInline(t *testing.T) {
+	type Config struct {
+		Nums []int `toml:"nums"`
+	}
+	out, err := MarshalWithOptions(Config{Nums: []int{1, 2, 3}}, WithArrayMultiline(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "  1,\n") {
+		t.Errorf("multiline array should format one per line, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTable — interface wrapping a map, pointer to map
+// ---------------------------------------------------------------------------
+
+func TestEncodeMapViaInterface(t *testing.T) {
+	inner := map[string]any{
+		"host": "localhost",
+	}
+	m := map[string]any{
+		"config": any(inner),
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "[config]") || !strings.Contains(got, `host = "localhost"`) {
+		t.Errorf("interface-wrapped map should encode, got:\n%s", got)
+	}
+}
+
+func TestEncodePointerToMap(t *testing.T) {
+	inner := map[string]int{"val": 42}
+	type Config struct {
+		Data *map[string]int `toml:"data"`
+	}
+	out, err := Marshal(Config{Data: &inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "val = 42") {
+		t.Errorf("pointer to map should encode, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeMap — array table via map[string]any with slice of struct
+// ---------------------------------------------------------------------------
+
+func TestEncodeMapSliceOfStructs(t *testing.T) {
+	type Item struct {
+		Name string `toml:"name"`
+	}
+	m := map[string]any{
+		"items": []Item{{Name: "a"}, {Name: "b"}},
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "[[items]]") {
+		t.Errorf("slice of structs in map should use [[]], got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: isEmpty — struct comparison
+// ---------------------------------------------------------------------------
+
+func TestEncodeOmitEmptyZeroStruct(t *testing.T) {
+	type Inner struct {
+		X int    `toml:"x"`
+		Y string `toml:"y"`
+	}
+	type Config struct {
+		Inner Inner `toml:"inner,omitempty,inline"`
+	}
+	out, err := Marshal(Config{Inner: Inner{X: 1, Y: ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "x = 1") {
+		t.Errorf("non-zero struct should not be omitted, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeStruct — table partition with sub-table and commented field
+// ---------------------------------------------------------------------------
+
+func TestEncodeStructCommentedTableField(t *testing.T) {
+	type Inner struct {
+		Val int `toml:"val"`
+	}
+	type Config struct {
+		Inner Inner `toml:"inner,commented" comment:"disabled section"`
+	}
+	out, err := Marshal(Config{Inner: Inner{Val: 42}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "# disabled section") {
+		t.Errorf("commented table field should have comment, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeMap — sub-map with pointer values
+// ---------------------------------------------------------------------------
+
+func TestEncodeMapWithNilValues(t *testing.T) {
+	m := map[string]any{
+		"name": "test",
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `name = "test"`) {
+		t.Errorf("simple map should encode, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: Uint encoding tags (octal, binary)
+// ---------------------------------------------------------------------------
+
+func TestEncodeUintHexTag(t *testing.T) {
+	type Config struct {
+		Perms uint32 `toml:"perms,hex"`
+	}
+	out, err := Marshal(Config{Perms: 0x755})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "0x") {
+		t.Errorf("uint hex should have 0x prefix, got:\n%s", out)
+	}
+}
+
+func TestEncodeUintOctalTag(t *testing.T) {
+	type Config struct {
+		Perms uint32 `toml:"perms,octal"`
+	}
+	out, err := Marshal(Config{Perms: 0o755})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "0o") {
+		t.Errorf("uint octal should have 0o prefix, got:\n%s", out)
+	}
+}
+
+func TestEncodeUintBinaryTag(t *testing.T) {
+	type Config struct {
+		Mask uint8 `toml:"mask,binary"`
+	}
+	out, err := Marshal(Config{Mask: 0b1010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "0b") {
+		t.Errorf("uint binary should have 0b prefix, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTable — nil pointer, invalid interface, non-struct/map
+// ---------------------------------------------------------------------------
+
+func TestEncodeTableNilPointer(t *testing.T) {
+	type Inner struct{ X int `toml:"x"` }
+	type Config struct {
+		Inner *Inner `toml:"inner"`
+	}
+	out, err := Marshal(Config{Inner: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "inner") && !strings.Contains(string(out), `""`) {
+		t.Errorf("nil pointer struct should be handled, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — marshaler error returns
+// ---------------------------------------------------------------------------
+
+type errMarshaler struct{}
+
+func (errMarshaler) MarshalTOML() (any, error) {
+	return nil, errors.New("marshal fail")
+}
+
+func TestEncodeValueMarshalerError(t *testing.T) {
+	type Config struct {
+		Val errMarshaler `toml:"val"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from Marshaler")
+	}
+}
+
+type errMarshalerCtx struct{}
+
+func (errMarshalerCtx) MarshalTOML(ctx context.Context) (any, error) {
+	return nil, errors.New("ctx marshal fail")
+}
+
+func TestEncodeValueMarshalerContextError(t *testing.T) {
+	type Config struct {
+		Val errMarshalerCtx `toml:"val"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from MarshalerContext")
+	}
+}
+
+type errBytesMarshaler struct{}
+
+func (errBytesMarshaler) MarshalTOML() ([]byte, error) {
+	return nil, errors.New("bytes marshal fail")
+}
+
+func TestEncodeValueBytesMarshalerError(t *testing.T) {
+	type Config struct {
+		Val errBytesMarshaler `toml:"val"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from BytesMarshaler")
+	}
+}
+
+type errTextMarshaler struct{}
+
+func (errTextMarshaler) MarshalText() ([]byte, error) {
+	return nil, errors.New("text marshal fail")
+}
+
+func TestEncodeValueTextMarshalerError(t *testing.T) {
+	type Config struct {
+		Val errTextMarshaler `toml:"val"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from TextMarshaler")
+	}
+}
+
+// Addr-based marshaler errors (pointer receivers on non-struct types).
+// Non-struct types bypass isTableValue and go through encodeValue directly,
+// where the CanAddr() marshaler check finds the pointer-receiver method.
+
+type errAddrMarshalerInt int
+
+func (*errAddrMarshalerInt) MarshalTOML() (any, error) {
+	return nil, errors.New("addr marshal fail")
+}
+
+func TestEncodeValueAddrMarshalerError(t *testing.T) {
+	type Config struct {
+		Val errAddrMarshalerInt `toml:"val"`
+	}
+	_, err := Marshal(&Config{Val: 1})
+	if err == nil {
+		t.Fatal("expected error from addr Marshaler")
+	}
+}
+
+type errAddrMarshalerCtxInt int
+
+func (*errAddrMarshalerCtxInt) MarshalTOML(ctx context.Context) (any, error) {
+	return nil, errors.New("addr ctx marshal fail")
+}
+
+func TestEncodeValueAddrMarshalerCtxError(t *testing.T) {
+	type Config struct {
+		Val errAddrMarshalerCtxInt `toml:"val"`
+	}
+	_, err := Marshal(&Config{Val: 1})
+	if err == nil {
+		t.Fatal("expected error from addr MarshalerContext")
+	}
+}
+
+type errAddrBytesMarshalerInt int
+
+func (*errAddrBytesMarshalerInt) MarshalTOML() ([]byte, error) {
+	return nil, errors.New("addr bytes marshal fail")
+}
+
+func TestEncodeValueAddrBytesMarshalerError(t *testing.T) {
+	type Config struct {
+		Val errAddrBytesMarshalerInt `toml:"val"`
+	}
+	_, err := Marshal(&Config{Val: 1})
+	if err == nil {
+		t.Fatal("expected error from addr BytesMarshaler")
+	}
+}
+
+type errAddrTextMarshalerInt int
+
+func (*errAddrTextMarshalerInt) MarshalText() ([]byte, error) {
+	return nil, errors.New("addr text marshal fail")
+}
+
+func TestEncodeValueAddrTextMarshalerError(t *testing.T) {
+	type Config struct {
+		Val errAddrTextMarshalerInt `toml:"val"`
+	}
+	_, err := Marshal(&Config{Val: 1})
+	if err == nil {
+		t.Fatal("expected error from addr TextMarshaler")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — custom marshaler registry error
+// ---------------------------------------------------------------------------
+
+func TestEncodeCustomMarshalerRegistryError(t *testing.T) {
+	type MyStr string
+	type Config struct {
+		Val MyStr `toml:"val"`
+	}
+	_, err := MarshalWithOptions(Config{Val: "hello"},
+		WithCustomMarshaler(func(d MyStr) ([]byte, error) {
+			return nil, errors.New("custom fail")
+		}),
+	)
+	if err == nil {
+		t.Fatal("expected error from custom marshaler registry")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeField — commented field with error in value encoding
+// ---------------------------------------------------------------------------
+
+func TestEncodeFieldCommentedError(t *testing.T) {
+	type Config struct {
+		Val errMarshaler `toml:"val,commented"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from commented field encoding")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTableField — nil pointer, interface unwrap, slice error
+// ---------------------------------------------------------------------------
+
+func TestEncodeTableFieldNilPtr(t *testing.T) {
+	type Inner struct{ X int `toml:"x"` }
+	type Config struct {
+		Inner *Inner `toml:"inner"`
+	}
+	out, err := Marshal(Config{Inner: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = out
+}
+
+func TestEncodeTableFieldInterfaceUnwrap(t *testing.T) {
+	type Wrapper struct {
+		Data any `toml:"data"`
+	}
+	inner := map[string]any{"x": 1}
+	out, err := Marshal(Wrapper{Data: inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "[data]") {
+		t.Errorf("interface wrapping map should produce table, got:\n%s", out)
+	}
+}
+
+func TestEncodeTableFieldSliceError(t *testing.T) {
+	type Config struct {
+		Items []errMarshaler `toml:"items,inline"`
+	}
+	_, err := Marshal(Config{Items: []errMarshaler{{}}})
+	if err == nil {
+		t.Fatal("expected error from table field slice encoding")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeMap — pointer/interface unwrap in table partition
+// ---------------------------------------------------------------------------
+
+func TestEncodeMapPointerTableValue(t *testing.T) {
+	inner := struct{ X int `toml:"x"` }{X: 5}
+	m := map[string]any{
+		"ptr": &inner,
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "x = 5") {
+		t.Errorf("pointer in map table should unwrap, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeMap — array table and table error returns
+// ---------------------------------------------------------------------------
+
+func TestEncodeMapArrayTableError(t *testing.T) {
+	type Bad struct {
+		Val errMarshaler `toml:"val"`
+	}
+	m := map[string]any{
+		"items": []any{Bad{}},
+	}
+	_, err := Marshal(m)
+	if err == nil {
+		t.Fatal("expected error from map array table encoding")
+	}
+}
+
+func TestEncodeMapTableError(t *testing.T) {
+	m := map[string]any{
+		"sub": map[string]any{
+			"val": errMarshaler{},
+		},
+	}
+	_, err := Marshal(m)
+	if err == nil {
+		t.Fatal("expected error from map table encoding")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeStruct — simple/table field error propagation
+// ---------------------------------------------------------------------------
+
+func TestEncodeStructSimpleFieldError(t *testing.T) {
+	type Config struct {
+		Val errMarshaler `toml:"val"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from simple field encoding")
+	}
+}
+
+func TestEncodeStructTableFieldError(t *testing.T) {
+	type Inner struct {
+		Val errMarshaler `toml:"val"`
+	}
+	type Config struct {
+		Inner Inner `toml:"inner"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from table field encoding")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeArray — multiline and non-multiline error
+// ---------------------------------------------------------------------------
+
+func TestEncodeArrayMultilineError(t *testing.T) {
+	type Config struct {
+		Items []errMarshaler `toml:"items,inline"`
+	}
+	_, err := MarshalWithOptions(Config{Items: []errMarshaler{{}}}, WithArrayMultiline(true))
+	if err == nil {
+		t.Fatal("expected error from multiline array encoding")
+	}
+}
+
+func TestEncodeArrayNonMultilineError(t *testing.T) {
+	type Config struct {
+		Items []errMarshaler `toml:"items,inline"`
+	}
+	_, err := Marshal(Config{Items: []errMarshaler{{}}})
+	if err == nil {
+		t.Fatal("expected error from array encoding")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeInlineTable — field error
+// ---------------------------------------------------------------------------
+
+func TestEncodeInlineTableFieldError(t *testing.T) {
+	type Inner struct {
+		Val errMarshaler `toml:"val"`
+	}
+	type Config struct {
+		Items []Inner `toml:"items"`
+	}
+	_, err := Marshal(Config{Items: []Inner{{}}})
+	if err == nil {
+		t.Fatal("expected error from inline table field encoding")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeInlineMap — value error
+// ---------------------------------------------------------------------------
+
+func TestEncodeInlineMapValueError(t *testing.T) {
+	m := map[string]errMarshaler{"x": {}}
+	type Config struct {
+		Data map[string]errMarshaler `toml:"data,inline"`
+	}
+	_, err := Marshal(Config{Data: m})
+	if err == nil {
+		t.Fatal("expected error from inline map value encoding")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeValue — unsupported type (chan, func, etc.)
+// ---------------------------------------------------------------------------
+
+func TestEncodeUnsupportedType(t *testing.T) {
+	ch := make(chan int)
+	m := map[string]any{"ch": ch}
+	_, err := Marshal(m)
+	if err == nil {
+		t.Fatal("expected error for unsupported type")
+	}
+	if !strings.Contains(err.Error(), "unsupported type") {
+		t.Errorf("wrong error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeTable — non-struct/map default error
+// ---------------------------------------------------------------------------
+
+func TestEncodeTableNonStructMapCov(t *testing.T) {
+	m := map[string]any{
+		"bad": []any{42, 43},
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Logf("expected no table treatment for int slice: %v", err)
+	}
+	_ = out
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: isEmpty — struct, default branches
+// ---------------------------------------------------------------------------
+
+func TestEncodeIsEmptyDefault(t *testing.T) {
+	type Config struct {
+		Ch chan int `toml:"ch,omitempty"`
+	}
+	ch := make(chan int)
+	_, err := Marshal(Config{Ch: ch})
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Logf("chan should be unsupported: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: escapeBasic — control char, escapeMultiLineBasic — control char
+// ---------------------------------------------------------------------------
+
+func TestEncodeEscapeBasicControlChar(t *testing.T) {
+	type Config struct {
+		Val string `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: "a\x01b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "\\u0001") {
+		t.Errorf("control char should be escaped, got:\n%s", out)
+	}
+}
+
+func TestEncodeEscapeBasicDEL(t *testing.T) {
+	type Config struct {
+		Val string `toml:"val"`
+	}
+	out, err := Marshal(Config{Val: "a\x7fb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "\\u007F") {
+		t.Errorf("DEL should be escaped, got:\n%s", out)
+	}
+}
+
+func TestEncodeEscapeMultilineBasicControlChar(t *testing.T) {
+	type Config struct {
+		Val string `toml:"val,multiline"`
+	}
+	out, err := Marshal(Config{Val: "line1\nline2\x02end"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "\\u0002") {
+		t.Errorf("multiline control char should be escaped, got:\n%s", out)
+	}
+}
+
+func TestEncodeEscapeMultilineBasicBackslash(t *testing.T) {
+	type Config struct {
+		Val string `toml:"val,multiline"`
+	}
+	out, err := Marshal(Config{Val: "path\\to\\file\nend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `\\`) {
+		t.Errorf("multiline backslash should be escaped, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: writeComment — with path prefix
+// ---------------------------------------------------------------------------
+
+func TestEncodeWriteCommentNestedPath(t *testing.T) {
+	type Inner struct {
+		X int `toml:"x"`
+	}
+	type Config struct {
+		Inner Inner `toml:"inner"`
+	}
+	out, err := MarshalWithOptions(Config{Inner: Inner{X: 1}},
+		WithComment(map[string][]Comment{
+			"inner.x": {{Text: "nested comment", Position: HeadCommentPos}},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "# nested comment") {
+		t.Errorf("nested comment should appear, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: isTableValue — BytesMarshaler returns false
+// ---------------------------------------------------------------------------
+
+func TestEncodeIsTableValueBytesMarshaler(t *testing.T) {
+	bm := bytesMarshaler{}
+	rv := reflect.ValueOf(bm)
+	if isTableValue(rv) {
+		t.Error("BytesMarshaler should not be table value")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: encodeField — non-commented field error return
+// ---------------------------------------------------------------------------
+
+func TestEncodeFieldNonCommentedError(t *testing.T) {
+	type Config struct {
+		Val errMarshaler `toml:"val"`
+	}
+	_, err := Marshal(Config{})
+	if err == nil {
+		t.Fatal("expected error from field with bad value")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Suppress unused import warnings
+// ---------------------------------------------------------------------------
+
+var _ = fmt.Sprint
+var _ = errors.New

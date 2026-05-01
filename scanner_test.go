@@ -1710,3 +1710,106 @@ func TestUnicodeInLiteralString(t *testing.T) {
 		t.Errorf("got %q, want %q", tok.value, "日本語")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Coverage: scanKey — quoted keys in key=value pairs
+// ---------------------------------------------------------------------------
+
+func TestScanQuotedKeyBasicString(t *testing.T) {
+	input := `"quoted key" = "value"`
+	tokens := mustScan(t, input)
+	findTokenValue(t, tokens, tokenBasicString, "quoted key")
+	findToken(t, tokens, tokenKeyValueSep)
+	findTokenValue(t, tokens, tokenBasicString, "value")
+}
+
+func TestScanQuotedKeyLiteralString(t *testing.T) {
+	input := "'literal key' = 42"
+	tokens := mustScan(t, input)
+	findTokenValue(t, tokens, tokenLiteralString, "literal key")
+	findToken(t, tokens, tokenKeyValueSep)
+	findTokenValue(t, tokens, tokenInteger, "42")
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: scanValue — literal string as value, special float value
+// ---------------------------------------------------------------------------
+
+func TestScanLiteralStringValue(t *testing.T) {
+	input := "key = 'literal value'"
+	tokens := mustScan(t, input)
+	findTokenValue(t, tokens, tokenLiteralString, "literal value")
+}
+
+func TestScanSpecialFloatInf(t *testing.T) {
+	input := "key = inf"
+	tokens := mustScan(t, input)
+	findTokenValue(t, tokens, tokenFloat, "inf")
+}
+
+func TestScanSpecialFloatNan(t *testing.T) {
+	input := "key = nan"
+	tokens := mustScan(t, input)
+	findTokenValue(t, tokens, tokenFloat, "nan")
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: isDigitForBase — base 10 fallback
+// ---------------------------------------------------------------------------
+
+func TestScanOctalInteger(t *testing.T) {
+	input := "key = 0o77"
+	tokens := mustScan(t, input)
+	findTokenValue(t, tokens, tokenInteger, "0o77")
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: scanLocalTime — without fractional seconds
+// ---------------------------------------------------------------------------
+
+func TestScanLocalTimeNoFraction(t *testing.T) {
+	input := "key = 07:32:00"
+	tokens := mustScan(t, input)
+	findTokenValue(t, tokens, tokenLocalTime, "07:32:00")
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: Valid — valid and invalid inputs
+// ---------------------------------------------------------------------------
+
+func TestValidInvalidUTF8(t *testing.T) {
+	if Valid([]byte{0xff, 0xfe}) {
+		t.Error("invalid UTF-8 should not be valid")
+	}
+}
+
+func TestValidParseError(t *testing.T) {
+	if Valid([]byte("key = ")) {
+		t.Error("incomplete key=value should not be valid")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: scanTableKey — literal string key in table header
+// ---------------------------------------------------------------------------
+
+func TestScanTableKeyLiteralString(t *testing.T) {
+	input := "['literal.key']"
+	tokens := mustScan(t, input)
+	findToken(t, tokens, tokenTableStart)
+	findTokenValue(t, tokens, tokenLiteralString, "literal.key")
+	findToken(t, tokens, tokenTableEnd)
+}
+
+func TestScanTableKeyError(t *testing.T) {
+	input := "[a.]"
+	_, err := newScanner([]byte(input))
+	if err != nil {
+		return
+	}
+	s, _ := newScanner([]byte(input))
+	_, err = s.scan()
+	if err == nil {
+		t.Error("expected error for trailing dot in table key")
+	}
+}
