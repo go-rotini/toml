@@ -78,7 +78,6 @@ func (r RawValue) Unmarshal(v any) error {
 }
 
 func wrapAsValue(raw []byte) []byte {
-	// Wrap as a key-value pair so the decoder can handle it
 	var buf bytes.Buffer
 	buf.WriteString("_raw_ = ")
 	buf.Write(raw)

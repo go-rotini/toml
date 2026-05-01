@@ -25,6 +25,7 @@ type LocalDate struct {
 	Day   int
 }
 
+// String returns the date in RFC 3339 full-date format (YYYY-MM-DD).
 func (d LocalDate) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)
 }
@@ -60,6 +61,7 @@ type LocalTime struct {
 	Nanosecond int
 }
 
+// String returns the time in HH:MM:SS format, with fractional seconds appended if non-zero.
 func (t LocalTime) String() string {
 	s := fmt.Sprintf("%02d:%02d:%02d", t.Hour, t.Minute, t.Second)
 	if t.Nanosecond > 0 {
@@ -103,6 +105,7 @@ type LocalDateTime struct {
 	LocalTime
 }
 
+// String returns the date-time in RFC 3339 format without a timezone offset (YYYY-MM-DDTHH:MM:SS).
 func (dt LocalDateTime) String() string {
 	return dt.LocalDate.String() + "T" + dt.LocalTime.String()
 }

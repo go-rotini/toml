@@ -20,17 +20,9 @@ type scanner struct {
 	col    int
 	tokens []token
 
-	// atLineStart tracks whether we are at the beginning of a logical line
-	// (after newline + optional whitespace). This determines whether [ is a
-	// table header or an array value.
-	atLineStart bool
-
-	// inValue tracks whether we are in the value position of a key = value
-	// pair. Resets at newline boundaries.
-	inValue bool
-
-	// nestStack tracks the type of each nesting level (array vs inline table).
-	nestStack []nestKind
+	atLineStart bool // [ at line start is a table header, not an array
+	inValue     bool
+	nestStack   []nestKind
 }
 
 func newScanner(src []byte) (*scanner, error) {
@@ -136,7 +128,6 @@ func (s *scanner) scanNext() error {
 	case ch == ',' && (s.inValue || len(s.nestStack) > 0):
 		s.emit(tokenComma, "")
 		s.advance()
-		// After comma in inline table → key position; in array → value position
 		if len(s.nestStack) > 0 && s.nestStack[len(s.nestStack)-1] == nestInlineTable {
 			s.inValue = false
 		}
@@ -337,7 +328,6 @@ func (s *scanner) scanSingleLineBasicString() error {
 }
 
 func (s *scanner) scanMultiLineBasicString() error {
-	// trim immediate newline after opening """
 	if !s.atEnd() && s.peek() == '\n' {
 		s.advance()
 	}
@@ -347,7 +337,6 @@ func (s *scanner) scanMultiLineBasicString() error {
 		if ch == '"' {
 			count := s.countConsecutive('"')
 			if count >= 3 {
-				// Allow up to 2 extra quotes before closing delimiter
 				extra := count - 3
 				if extra > 2 {
 					return s.syntaxError("too many quotes in multi-line basic string")
@@ -368,7 +357,6 @@ func (s *scanner) scanMultiLineBasicString() error {
 			continue
 		}
 		if ch == '\\' {
-			// Check for line-ending backslash
 			saved := s.pos
 			savedCol := s.col
 			s.advance() // consume backslash
@@ -462,7 +450,6 @@ func (s *scanner) scanSingleLineLiteralString() error {
 }
 
 func (s *scanner) scanMultiLineLiteralString() error {
-	// trim immediate newline after opening '''
 	if !s.atEnd() && s.peek() == '\n' {
 		s.advance()
 	}
@@ -709,7 +696,6 @@ func isDigitForBase(ch byte, base int) bool {
 
 func (s *scanner) scanNumberFrom(start int, hasSigned bool) error {
 	_ = hasSigned
-	// Scan decimal digits
 	for !s.atEnd() {
 		ch := s.peek()
 		if ch >= '0' && ch <= '9' {
@@ -745,7 +731,6 @@ func (s *scanner) scanNumberFrom(start int, hasSigned bool) error {
 		return s.scanLocalTime(start)
 	}
 
-	// Float with decimal or exponent
 	if ch == '.' {
 		if err := checkLeadingZeros(digitsOnly); err != nil {
 			return s.syntaxError(err.Error())
@@ -811,16 +796,9 @@ func (s *scanner) scanDecimalDigits() {
 	}
 }
 
+// scanDateTime parses date, local-datetime, and offset-datetime tokens.
+// Entry: the year (4 digits) has already been scanned.
 func (s *scanner) scanDateTime(start int) error {
-	// We've already scanned the year (4 digits). Now scan the rest.
-	// Possible formats:
-	//   1979-05-27 (local date)
-	//   1979-05-27T07:32:00 (local datetime)
-	//   1979-05-27T07:32:00Z (offset datetime)
-	//   1979-05-27T07:32:00+00:00 (offset datetime)
-	//   1979-05-27 07:32:00Z (space delimiter)
-
-	// Consume -MM-DD
 	if !s.expect('-') {
 		return s.syntaxError("expected '-' in date")
 	}
@@ -834,13 +812,11 @@ func (s *scanner) scanDateTime(start int) error {
 		return err
 	}
 
-	// Check for time portion
 	if s.atEnd() || (s.peek() != 'T' && s.peek() != 't' && s.peek() != ' ') {
 		s.emit(tokenLocalDate, string(s.src[start:s.pos]))
 		return nil
 	}
 
-	// Check if space-delimited: only valid if next non-space is a digit (time)
 	if s.peek() == ' ' {
 		if s.pos+1 >= len(s.src) || s.src[s.pos+1] < '0' || s.src[s.pos+1] > '9' {
 			s.emit(tokenLocalDate, string(s.src[start:s.pos]))
@@ -848,9 +824,8 @@ func (s *scanner) scanDateTime(start int) error {
 		}
 	}
 
-	s.advance() // consume T or space
+	s.advance()
 
-	// Scan time: HH:MM[:SS[.frac]]
 	if err := s.expectDigits(2); err != nil {
 		return err
 	}
@@ -866,7 +841,6 @@ func (s *scanner) scanDateTime(start int) error {
 			return err
 		}
 
-		// Fractional seconds
 		if !s.atEnd() && s.peek() == '.' {
 			s.advance()
 			if s.atEnd() || s.peek() < '0' || s.peek() > '9' {
@@ -878,7 +852,6 @@ func (s *scanner) scanDateTime(start int) error {
 		}
 	}
 
-	// Check for timezone offset
 	if s.atEnd() {
 		s.emit(tokenLocalDateTime, string(s.src[start:s.pos]))
 		return nil
@@ -919,7 +892,6 @@ func (s *scanner) scanDateTime(start int) error {
 }
 
 func (s *scanner) scanLocalTime(start int) error {
-	// We've scanned HH, now scan :MM[:SS[.fractional]]
 	if !s.expect(':') {
 		return s.syntaxError("expected ':' in time")
 	}
@@ -932,7 +904,6 @@ func (s *scanner) scanLocalTime(start int) error {
 			return err
 		}
 
-		// Fractional seconds (only valid when seconds are present)
 		if !s.atEnd() && s.peek() == '.' {
 			s.advance()
 			if s.atEnd() || s.peek() < '0' || s.peek() > '9' {
@@ -964,8 +935,6 @@ func (s *scanner) scanComment() error {
 	s.emit(tokenComment, string(s.src[start:s.pos]))
 	return nil
 }
-
-// Helper methods
 
 func (s *scanner) position() Position {
 	return Position{Line: s.line, Column: s.col, Offset: s.pos}
@@ -1022,7 +991,6 @@ func (s *scanner) matchWord(word string) bool {
 	if string(s.src[s.pos:end]) != word {
 		return false
 	}
-	// Ensure the word is not followed by a bare-key character
 	if end < len(s.src) {
 		r, _ := utf8.DecodeRune(s.src[end:])
 		if isBareKeyChar(r) {

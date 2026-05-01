@@ -90,7 +90,6 @@ func (p *parser) consumeHeadComment() string {
 }
 
 func (p *parser) consumeLineComment() string {
-	// Check if the next token on the same line is a comment
 	if p.pos < len(p.tokens) && p.tokens[p.pos].kind == tokenComment {
 		c := p.tokens[p.pos].value
 		p.advance()
@@ -118,7 +117,6 @@ func (p *parser) parseTable() error {
 
 	lineComment := p.consumeLineComment()
 
-	// After table header + optional comment, only newline or EOF is allowed
 	if p.pos < len(p.tokens) {
 		next := p.peek()
 		if next.kind != tokenNewline && next.kind != tokenEOF && next.kind != tokenComment && next.kind != tokenStreamEnd {
@@ -139,7 +137,6 @@ func (p *parser) parseTable() error {
 	if p.dottedImplicit[path] {
 		return &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].pos}
 	}
-	// Check that no prefix is a non-table value
 	for i := range keys[:len(keys)-1] {
 		prefix := "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
 		if p.defined[prefix] && !p.implicit[prefix] && !p.explicitTables[prefix] && !p.arrayDefined[prefix] {
@@ -173,7 +170,6 @@ func (p *parser) parseArrayTable() error {
 
 	lineComment := p.consumeLineComment()
 
-	// After array table header + optional comment, only newline or EOF is allowed
 	if p.pos < len(p.tokens) {
 		next := p.peek()
 		if next.kind != tokenNewline && next.kind != tokenEOF && next.kind != tokenComment && next.kind != tokenStreamEnd {
@@ -197,7 +193,6 @@ func (p *parser) parseArrayTable() error {
 	if p.implicit[path] && !p.arrayDefined[path] {
 		return &ConflictError{Key: displayPath(keys), Message: "cannot define array of tables: already implicitly defined as table", Pos: keys[0].pos}
 	}
-	// Check that no prefix is a non-table value
 	for i := range keys[:len(keys)-1] {
 		prefix := "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
 		if p.defined[prefix] && !p.implicit[prefix] && !p.explicitTables[prefix] && !p.arrayDefined[prefix] {
@@ -206,8 +201,7 @@ func (p *parser) parseArrayTable() error {
 	}
 	p.arrayDefined[path] = true
 
-	// Clear defined keys scoped under this array table path so each
-	// entry starts with a clean namespace.
+	// Each [[array]] entry starts with a clean namespace.
 	clearPrefix := path + "\x00"
 	for k := range p.defined {
 		if strings.HasPrefix(k, clearPrefix) {
@@ -253,10 +247,8 @@ func (p *parser) parseKeyValue() error {
 
 	lineComment := p.consumeLineComment()
 
-	// Build full path from root
 	fullPath := p.currentPath + "\x00" + joinKeys(keys)
 
-	// Check dotted key prefixes don't overwrite existing values
 	target := p.current
 	for i, k := range keys[:len(keys)-1] {
 		subPath := p.currentPath + "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
@@ -452,7 +444,6 @@ func (p *parser) parseInlineTable() (*node, error) {
 		}
 		defined[fullPath] = true
 
-		// Expand dotted keys into nested tables
 		target := tbl
 		for i, k := range keys[:len(keys)-1] {
 			subPath := joinKeyStrings(keyStrings(keys[:i+1]))
@@ -528,7 +519,6 @@ func (p *parser) ensureTable(keys []token) *node {
 			subPath := "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
 			p.implicit[subPath] = true
 		}
-		// For array-of-tables, target the last entry
 		if child.kind == nodeArrayTable {
 			last := findLastArrayEntry(target, k.value)
 			if last != nil {
@@ -564,8 +554,6 @@ func findLastArrayEntry(parent *node, key string) *node {
 	}
 	return last
 }
-
-// Helper methods
 
 func (p *parser) peek() token {
 	if p.pos >= len(p.tokens) {

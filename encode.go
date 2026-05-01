@@ -90,7 +90,6 @@ func (e *encoder) encodeTable(rv reflect.Value, path []string) error {
 func (e *encoder) encodeStruct(rv reflect.Value, path []string) error {
 	sf := getStructFields(rv.Type())
 
-	// Partition fields: simple values first, then sub-tables
 	type fieldEntry struct {
 		fi    fieldInfo
 		value reflect.Value
@@ -137,7 +136,6 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 		return fmt.Sprint(keys[i].Interface()) < fmt.Sprint(keys[j].Interface())
 	})
 
-	// Partition: simple values first, then sub-tables
 	type mapEntry struct {
 		key   string
 		value reflect.Value
@@ -291,7 +289,6 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		return nil
 	}
 
-	// Check custom marshalers
 	if rv.CanInterface() {
 		iface := rv.Interface()
 		if m, ok := iface.(MarshalerContext); ok {
@@ -360,7 +357,6 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		}
 	}
 
-	// Check custom marshaler registry
 	if e.opts.customMarshalers != nil {
 		if fn, ok := e.opts.customMarshalers[rv.Type()]; ok {
 			result := reflect.ValueOf(fn).Call([]reflect.Value{rv})
@@ -397,7 +393,6 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		return e.encodeFloat(rv.Float())
 	case reflect.Slice:
 		if rv.Type().Elem().Kind() == reflect.Uint8 {
-			// []byte → base64-encoded string
 			e.encodeString(encodeBase64(rv.Bytes()), fi)
 			return nil
 		}
@@ -780,7 +775,6 @@ func isTableValue(rv reflect.Value) bool {
 	}
 	switch rv.Kind() {
 	case reflect.Struct:
-		// Check for special types that encode as scalars
 		if rv.Type() == reflect.TypeOf(time.Time{}) ||
 			rv.Type() == reflect.TypeOf(LocalDate{}) ||
 			rv.Type() == reflect.TypeOf(LocalTime{}) ||
@@ -895,7 +889,6 @@ func escapeMultiLineBasic(s string) string {
 		case '\f':
 			buf.WriteString(`\f`)
 		case '\r':
-			// skip \r (already normalized)
 		case '\\':
 			buf.WriteString(`\\`)
 		default:

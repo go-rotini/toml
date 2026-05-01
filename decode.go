@@ -12,14 +12,15 @@ import (
 	"time"
 )
 
-// Unmarshaler is implemented by types that need structured access to
-// their TOML data during decoding.
+// Unmarshaler is implemented by types that control their own TOML
+// decoding. The unmarshal function decodes the TOML value into the
+// provided Go value, similar to [Unmarshal].
 type Unmarshaler interface {
 	UnmarshalTOML(unmarshal func(any) error) error
 }
 
 // BytesUnmarshaler is implemented by types that can decode themselves
-// from raw TOML bytes.
+// directly from raw TOML bytes.
 type BytesUnmarshaler interface {
 	UnmarshalTOML(data []byte) error
 }
@@ -171,7 +172,6 @@ func (d *decoder) decodeTableToStruct(n *node, rv reflect.Value) error {
 		}
 	}
 
-	// Check required fields and apply defaults
 	for _, fi := range sf.fields {
 		if assigned[fi.name] {
 			continue
@@ -190,7 +190,6 @@ func (d *decoder) decodeTableToStruct(n *node, rv reflect.Value) error {
 		}
 	}
 
-	// Validate struct
 	if d.opts.validator != nil {
 		if err := d.opts.validator.Struct(rv.Addr().Interface()); err != nil {
 			return &ValidationError{Err: err, Pos: n.pos}
@@ -377,7 +376,6 @@ func (d *decoder) decodeValue(n *node, rv reflect.Value) error {
 		rv = rv.Elem()
 	}
 
-	// Check custom unmarshalers
 	if rv.CanAddr() && rv.Addr().CanInterface() {
 		iface := rv.Addr().Interface()
 		if u, ok := iface.(UnmarshalerContext); ok {
@@ -409,7 +407,6 @@ func (d *decoder) decodeValue(n *node, rv reflect.Value) error {
 		}
 	}
 
-	// Check custom unmarshaler registry
 	if d.opts.customUnmarshalers != nil {
 		if fn, ok := d.opts.customUnmarshalers[rv.Type()]; ok {
 			raw := nodeRawBytes(n)
@@ -934,27 +931,24 @@ func normalizeDateTimeSeparators(s string) string {
 	return s
 }
 
+// normalizeNoSeconds inserts ":00" seconds into datetime strings like
+// "2024-01-01T12:30Z" that omit the seconds component.
 func normalizeNoSeconds(s string) string {
 	tIdx := strings.IndexByte(s, 'T')
 	if tIdx == -1 {
 		return s
 	}
-	// Find the end of the local time portion (before Z, +, -)
 	i := tIdx + 1
-	// Skip HH:MM (5 chars)
 	if i+5 > len(s) || s[i+2] != ':' {
 		return s
 	}
-	i += 5
-	// Check what follows: if it's a colon, seconds are present
+	i += 5 // past HH:MM
 	if i < len(s) && s[i] == ':' {
 		return s
 	}
-	// Check if it's a fractional part (impossible without seconds, but be safe)
 	if i < len(s) && s[i] == '.' {
 		return s
 	}
-	// No seconds found — insert :00
 	return s[:i] + ":00" + s[i:]
 }
 

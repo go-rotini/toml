@@ -14,6 +14,7 @@ type Position struct {
 	Offset int
 }
 
+// String returns the position formatted as "line:column".
 func (p Position) String() string {
 	return fmt.Sprintf("%d:%d", p.Line, p.Column)
 }
@@ -173,21 +174,35 @@ func (e *ConflictError) Is(target error) bool {
 
 // Sentinel errors for use with [errors.Is].
 var (
-	ErrSyntax       = &SyntaxError{}
-	ErrType         = &TypeError{}
+	// ErrSyntax indicates malformed TOML input.
+	ErrSyntax = &SyntaxError{}
+	// ErrType indicates one or more TOML values could not be assigned to the target Go types.
+	ErrType = &TypeError{}
+	// ErrUnknownField indicates a TOML key has no corresponding struct field (with [WithStrict]).
 	ErrUnknownField = &UnknownFieldError{}
+	// ErrDuplicateKey indicates a TOML key was defined more than once within a table.
 	ErrDuplicateKey = &DuplicateKeyError{}
-	ErrValidation   = &ValidationError{}
-	ErrDefault      = &DefaultError{}
-	ErrOverflow     = &OverflowError{}
-	ErrInlineTable  = &InlineTableError{}
-	ErrConflict     = &ConflictError{}
+	// ErrValidation indicates a [StructValidator] rejected a decoded struct.
+	ErrValidation = &ValidationError{}
+	// ErrDefault indicates a default struct tag value could not be applied.
+	ErrDefault = &DefaultError{}
+	// ErrOverflow indicates a TOML integer overflows the target Go type.
+	ErrOverflow = &OverflowError{}
+	// ErrInlineTable indicates an inline table was modified after its initial definition.
+	ErrInlineTable = &InlineTableError{}
+	// ErrConflict indicates a key conflicts with an existing definition.
+	ErrConflict = &ConflictError{}
 
-	ErrPathSyntax   = errors.New("toml: invalid path syntax")
+	// ErrPathSyntax indicates an invalid [Path] expression.
+	ErrPathSyntax = errors.New("toml: invalid path syntax")
+	// ErrPathNotFound indicates no node matched a [Path] query.
 	ErrPathNotFound = errors.New("toml: path not found")
-	ErrNilPointer   = errors.New("toml: non-nil pointer required")
+	// ErrNilPointer indicates a nil pointer was passed where a non-nil pointer is required.
+	ErrNilPointer = errors.New("toml: non-nil pointer required")
+	// ErrDocumentSize indicates the input exceeds the configured [WithMaxDocumentSize] limit.
 	ErrDocumentSize = errors.New("toml: document size exceeds limit")
-	ErrMarshalTop   = errors.New("toml: top-level value must be a table (struct or map)")
+	// ErrMarshalTop indicates the top-level value passed to [Marshal] is not a struct or map.
+	ErrMarshalTop = errors.New("toml: top-level value must be a table (struct or map)")
 )
 
 var (
