@@ -80,6 +80,7 @@ func (t *LocalTime) UnmarshalText(data []byte) error {
 	layouts := []string{
 		"15:04:05.999999999",
 		"15:04:05",
+		"15:04",
 	}
 	s := string(data)
 	for _, layout := range layouts {
@@ -116,8 +117,10 @@ func (dt *LocalDateTime) UnmarshalText(data []byte) error {
 	layouts := []string{
 		"2006-01-02T15:04:05.999999999",
 		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
 		"2006-01-02 15:04:05.999999999",
 		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
 	}
 	s := string(data)
 	for _, layout := range layouts {

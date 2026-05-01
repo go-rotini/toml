@@ -6,33 +6,14 @@ import (
 	"testing"
 )
 
-func TestTOML11UnicodeBareKeys(t *testing.T) {
+func TestTOML11UnicodeBareKeysRejected(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "toml11", "unicode_bare_keys.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var m map[string]any
-	if err := Unmarshal(data, &m); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	checks := map[string]string{
-		"café":           "coffee",
-		"über":           "over",
-		"日本語":            "Japanese",
-		"中文":             "Chinese",
-		"ñ":              "tilde-n",
-		"αβγ":            "Greek",
-		"mixed_café_123": "mixed",
-	}
-	for k, want := range checks {
-		got, ok := m[k]
-		if !ok {
-			t.Errorf("key %q not found", k)
-			continue
-		}
-		if got != want {
-			t.Errorf("m[%q] = %q, want %q", k, got, want)
-		}
+	if err := Unmarshal(data, &m); err == nil {
+		t.Fatal("expected error for Unicode bare keys, got nil")
 	}
 }
 

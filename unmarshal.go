@@ -23,7 +23,11 @@ func UnmarshalWithOptions(data []byte, v any, opts ...DecodeOption) error {
 		return ErrDocumentSize
 	}
 
-	tokens, err := newScanner(data).scan()
+	s, err := newScanner(data)
+	if err != nil {
+		return err
+	}
+	tokens, err := s.scan()
 	if err != nil {
 		return err
 	}
@@ -95,7 +99,11 @@ func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 		return ErrDocumentSize
 	}
 
-	tokens, err := newScanner(data).scan()
+	sc, err := newScanner(data)
+	if err != nil {
+		return err
+	}
+	tokens, err := sc.scan()
 	if err != nil {
 		return err
 	}

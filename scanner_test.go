@@ -37,7 +37,10 @@ func tokenValues(tokens []token) []token {
 // mustScan scans input and fails the test on error.
 func mustScan(t *testing.T, input string) []token {
 	t.Helper()
-	s := newScanner([]byte(input))
+	s, err := newScanner([]byte(input))
+	if err != nil {
+		t.Fatalf("scan(%q) unexpected error: %v", input, err)
+	}
 	tokens, err := s.scan()
 	if err != nil {
 		t.Fatalf("scan(%q) unexpected error: %v", input, err)
@@ -48,8 +51,11 @@ func mustScan(t *testing.T, input string) []token {
 // mustScanError scans input and expects an error.
 func mustScanError(t *testing.T, input string) error {
 	t.Helper()
-	s := newScanner([]byte(input))
-	_, err := s.scan()
+	s, err := newScanner([]byte(input))
+	if err != nil {
+		return err
+	}
+	_, err = s.scan()
 	if err == nil {
 		t.Fatalf("scan(%q) expected error, got nil", input)
 	}
@@ -120,12 +126,10 @@ func TestCRLFNormalization(t *testing.T) {
 	findTokenValue(t, tokens, tokenInteger, "2")
 }
 
-func TestBareCRNormalization(t *testing.T) {
-	// Bare \r (not followed by \n) should be normalized to \n
+func TestBareCRRejected(t *testing.T) {
+	// Bare \r (not followed by \n) must be rejected per TOML spec
 	input := "key1 = 1\rkey2 = 2"
-	tokens := mustScan(t, input)
-	findTokenValue(t, tokens, tokenBareKey, "key1")
-	findTokenValue(t, tokens, tokenBareKey, "key2")
+	mustScanError(t, input)
 }
 
 func TestCRLFInMultiLineBasicString(t *testing.T) {
@@ -912,8 +916,11 @@ func TestCommentControlCharsU0000toU0008(t *testing.T) {
 		input := []byte("# hello")
 		input = append(input, c)
 		input = append(input, []byte("world")...)
-		s := newScanner(input)
-		_, err := s.scan()
+		s, err := newScanner(input)
+		if err != nil {
+			continue
+		}
+		_, err = s.scan()
 		if err == nil {
 			t.Errorf("expected error for control char U+%04X in comment", c)
 		}
@@ -930,21 +937,27 @@ func TestBareKeyASCII(t *testing.T) {
 	findTokenValue(t, tokens, tokenBareKey, "abc-123_DEF")
 }
 
-func TestBareKeyUnicode(t *testing.T) {
+func TestBareKeyUnicodeRejected(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
-		want  string
 	}{
-		{"accented", "é = 1", "é"},           // e with accent
-		{"chinese", "世界 = 1", "世界"}, // 世界
-		{"japanese", "こんにちは = 1", "こんにちは"}, // こんにちは
-		{"mixed ascii unicode", "café = 1", "café"},
+		{"accented", "é = 1"},
+		{"chinese", "世界 = 1"},
+		{"japanese", "こんにちは = 1"},
+		{"mixed ascii unicode", "café = 1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tokens := mustScan(t, tt.input)
-			findTokenValue(t, tokens, tokenBareKey, tt.want)
+			_, err := newScanner([]byte(tt.input))
+			if err != nil {
+				return
+			}
+			s, _ := newScanner([]byte(tt.input))
+			_, err = s.scan()
+			if err == nil {
+				t.Errorf("expected error scanning %q but got none", tt.input)
+			}
 		})
 	}
 }
@@ -1050,8 +1063,11 @@ func TestControlCharInBasicString(t *testing.T) {
 			input := []byte("key = \"hello")
 			input = append(input, tt.char)
 			input = append(input, []byte("world\"")...)
-			s := newScanner(input)
-			_, err := s.scan()
+			s, err := newScanner(input)
+			if err != nil {
+				return
+			}
+			_, err = s.scan()
 			if err == nil {
 				t.Errorf("expected error for control char 0x%02X in basic string", tt.char)
 			}
@@ -1072,8 +1088,10 @@ func TestControlCharInLiteralString(t *testing.T) {
 	input := []byte("key = 'hello")
 	input = append(input, 0x01)
 	input = append(input, []byte("world'")...)
-	s := newScanner(input)
-	_, err := s.scan()
+	s, err := newScanner(input)
+	if err == nil {
+		_, err = s.scan()
+	}
 	if err == nil {
 		t.Error("expected error for control char in literal string")
 	}
@@ -1083,8 +1101,10 @@ func TestControlCharInMultiLineBasicString(t *testing.T) {
 	input := []byte("key = \"\"\"\nhello")
 	input = append(input, 0x01)
 	input = append(input, []byte("world\"\"\"")...)
-	s := newScanner(input)
-	_, err := s.scan()
+	s, err := newScanner(input)
+	if err == nil {
+		_, err = s.scan()
+	}
 	if err == nil {
 		t.Error("expected error for control char in multi-line basic string")
 	}
@@ -1094,8 +1114,10 @@ func TestControlCharInMultiLineLiteralString(t *testing.T) {
 	input := []byte("key = '''\nhello")
 	input = append(input, 0x01)
 	input = append(input, []byte("world'''")...)
-	s := newScanner(input)
-	_, err := s.scan()
+	s, err := newScanner(input)
+	if err == nil {
+		_, err = s.scan()
+	}
 	if err == nil {
 		t.Error("expected error for control char in multi-line literal string")
 	}
@@ -1106,8 +1128,10 @@ func TestInvalidUTF8InString(t *testing.T) {
 	input := []byte("key = \"hello")
 	input = append(input, 0xFF)
 	input = append(input, []byte("world\"")...)
-	s := newScanner(input)
-	_, err := s.scan()
+	s, err := newScanner(input)
+	if err == nil {
+		_, err = s.scan()
+	}
 	if err == nil {
 		t.Error("expected error for invalid UTF-8 in string")
 	}
@@ -1116,8 +1140,10 @@ func TestInvalidUTF8InString(t *testing.T) {
 func TestInvalidUTF8InComment(t *testing.T) {
 	input := []byte("# hello")
 	input = append(input, 0xFF)
-	s := newScanner(input)
-	_, err := s.scan()
+	s, err := newScanner(input)
+	if err == nil {
+		_, err = s.scan()
+	}
 	if err == nil {
 		t.Error("expected error for invalid UTF-8 in comment")
 	}
@@ -1125,8 +1151,10 @@ func TestInvalidUTF8InComment(t *testing.T) {
 
 func TestInvalidUTF8InBareKey(t *testing.T) {
 	input := []byte{0xFF, ' ', '=', ' ', '1'}
-	s := newScanner(input)
-	_, err := s.scan()
+	s, err := newScanner(input)
+	if err == nil {
+		_, err = s.scan()
+	}
 	if err == nil {
 		t.Error("expected error for invalid UTF-8 in bare key")
 	}
@@ -1475,9 +1503,9 @@ func TestIsBareKeyChar(t *testing.T) {
 		{'"', false},
 		{'\'', false},
 		{'#', false},
-		{'é', true},  // e with accent - Unicode letter
-		{'世', true},  // 世 - CJK character
-		{'̀', false},  // combining grave accent - not a letter or digit
+		{'é', false},
+		{'世', false},
+		{'̀', false},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.r), func(t *testing.T) {
@@ -1561,22 +1589,26 @@ func TestCheckLeadingZeros(t *testing.T) {
 
 func TestNormalizeCRLF(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
-		want  string
+		name    string
+		input   string
+		want    string
+		wantErr bool
 	}{
-		{"no CR", "abc\ndef", "abc\ndef"},
-		{"CRLF", "abc\r\ndef", "abc\ndef"},
-		{"bare CR", "abc\rdef", "abc\ndef"},
-		{"multiple CRLF", "a\r\nb\r\nc", "a\nb\nc"},
-		{"mixed", "a\r\nb\rc\nd", "a\nb\nc\nd"},
-		{"trailing CRLF", "abc\r\n", "abc\n"},
-		{"empty", "", ""},
+		{"no CR", "abc\ndef", "abc\ndef", false},
+		{"CRLF", "abc\r\ndef", "abc\ndef", false},
+		{"bare CR", "abc\rdef", "", true},
+		{"multiple CRLF", "a\r\nb\r\nc", "a\nb\nc", false},
+		{"trailing CRLF", "abc\r\n", "abc\n", false},
+		{"empty", "", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(normalizeCRLF([]byte(tt.input)))
-			if got != tt.want {
+			got, err := normalizeCRLF([]byte(tt.input))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("normalizeCRLF(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if err == nil && string(got) != tt.want {
 				t.Errorf("normalizeCRLF(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})

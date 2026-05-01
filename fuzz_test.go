@@ -39,7 +39,11 @@ func FuzzScanner(f *testing.F) {
 	f.Add([]byte("\x00\x01\x02\x03"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = newScanner(data).scan()
+		s, err := newScanner(data)
+		if err != nil {
+			return
+		}
+		_, _ = s.scan()
 	})
 }
 

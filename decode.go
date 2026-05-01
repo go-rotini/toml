@@ -592,9 +592,7 @@ func (d *decoder) decodeBoolean(s string, rv reflect.Value) error {
 }
 
 func (d *decoder) decodeDateTime(s string, rv reflect.Value) error {
-	// Normalize TOML datetime to RFC3339
-	s = strings.Replace(s, " ", "T", 1)
-	s = strings.Replace(s, "t", "T", 1)
+	s = normalizeDateTimeSeparators(s)
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		t, err = time.Parse(time.RFC3339, s)
@@ -616,8 +614,7 @@ func (d *decoder) decodeDateTime(s string, rv reflect.Value) error {
 }
 
 func (d *decoder) decodeLocalDateTime(s string, rv reflect.Value) error {
-	s = strings.Replace(s, " ", "T", 1)
-	s = strings.Replace(s, "t", "T", 1)
+	s = normalizeDateTimeSeparators(s)
 
 	switch {
 	case rv.Type() == reflect.TypeOf(LocalDateTime{}):
@@ -641,9 +638,11 @@ func (d *decoder) decodeLocalDateTime(s string, rv reflect.Value) error {
 		d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local datetime %q", s))
 	case rv.Kind() == reflect.Interface:
 		var ldt LocalDateTime
-		if err := ldt.UnmarshalText([]byte(s)); err == nil {
-			rv.Set(reflect.ValueOf(ldt))
+		if err := ldt.UnmarshalText([]byte(s)); err != nil {
+			d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local datetime %q: %v", s, err))
+			return nil
 		}
+		rv.Set(reflect.ValueOf(ldt))
 	default:
 		d.typeErrors = append(d.typeErrors, fmt.Sprintf("cannot decode local datetime into %s", rv.Type()))
 	}
@@ -668,9 +667,11 @@ func (d *decoder) decodeLocalDate(s string, rv reflect.Value) error {
 		rv.Set(reflect.ValueOf(t))
 	case rv.Kind() == reflect.Interface:
 		var ld LocalDate
-		if err := ld.UnmarshalText([]byte(s)); err == nil {
-			rv.Set(reflect.ValueOf(ld))
+		if err := ld.UnmarshalText([]byte(s)); err != nil {
+			d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local date %q: %v", s, err))
+			return nil
 		}
+		rv.Set(reflect.ValueOf(ld))
 	default:
 		d.typeErrors = append(d.typeErrors, fmt.Sprintf("cannot decode local date into %s", rv.Type()))
 	}
@@ -688,9 +689,11 @@ func (d *decoder) decodeLocalTime(s string, rv reflect.Value) error {
 		rv.Set(reflect.ValueOf(lt))
 	case rv.Kind() == reflect.Interface:
 		var lt LocalTime
-		if err := lt.UnmarshalText([]byte(s)); err == nil {
-			rv.Set(reflect.ValueOf(lt))
+		if err := lt.UnmarshalText([]byte(s)); err != nil {
+			d.typeErrors = append(d.typeErrors, fmt.Sprintf("invalid local time %q: %v", s, err))
+			return nil
 		}
+		rv.Set(reflect.ValueOf(lt))
 	default:
 		d.typeErrors = append(d.typeErrors, fmt.Sprintf("cannot decode local time into %s", rv.Type()))
 	}
@@ -769,8 +772,7 @@ func (d *decoder) nodeToInterface(n *node) (any, error) {
 	case nodeBoolean:
 		return n.value == "true", nil
 	case nodeDateTime:
-		s := strings.Replace(n.value, " ", "T", 1)
-		s = strings.Replace(s, "t", "T", 1)
+		s := normalizeDateTimeSeparators(n.value)
 		t, err := time.Parse(time.RFC3339Nano, s)
 		if err != nil {
 			t, err = time.Parse(time.RFC3339, s)
@@ -778,7 +780,7 @@ func (d *decoder) nodeToInterface(n *node) (any, error) {
 		return t, err
 	case nodeLocalDateTime:
 		var ldt LocalDateTime
-		s := strings.Replace(n.value, " ", "T", 1)
+		s := normalizeDateTimeSeparators(n.value)
 		err := ldt.UnmarshalText([]byte(s))
 		return ldt, err
 	case nodeLocalDate:
@@ -918,6 +920,42 @@ func setTextUnmarshalerKey(rv reflect.Value, key string) error {
 
 func nodeRawBytes(n *node) []byte {
 	return []byte(n.value)
+}
+
+func normalizeDateTimeSeparators(s string) string {
+	s = strings.Replace(s, " ", "T", 1)
+	if idx := strings.IndexByte(s, 'T'); idx == -1 {
+		s = strings.Replace(s, "t", "T", 1)
+	}
+	if strings.HasSuffix(s, "z") {
+		s = s[:len(s)-1] + "Z"
+	}
+	s = normalizeNoSeconds(s)
+	return s
+}
+
+func normalizeNoSeconds(s string) string {
+	tIdx := strings.IndexByte(s, 'T')
+	if tIdx == -1 {
+		return s
+	}
+	// Find the end of the local time portion (before Z, +, -)
+	i := tIdx + 1
+	// Skip HH:MM (5 chars)
+	if i+5 > len(s) || s[i+2] != ':' {
+		return s
+	}
+	i += 5
+	// Check what follows: if it's a colon, seconds are present
+	if i < len(s) && s[i] == ':' {
+		return s
+	}
+	// Check if it's a fractional part (impossible without seconds, but be safe)
+	if i < len(s) && s[i] == '.' {
+		return s
+	}
+	// No seconds found — insert :00
+	return s[:i] + ":00" + s[i:]
 }
 
 func decodeBase64(s string) ([]byte, error) {

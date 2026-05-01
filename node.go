@@ -139,7 +139,11 @@ type File struct {
 
 // Parse tokenizes and parses data into an AST.
 func Parse(data []byte) (*File, error) {
-	tokens, err := newScanner(data).scan()
+	s, err := newScanner(data)
+	if err != nil {
+		return nil, err
+	}
+	tokens, err := s.scan()
 	if err != nil {
 		return nil, err
 	}

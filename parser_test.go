@@ -1051,7 +1051,11 @@ func TestParseMaxNodes(t *testing.T) {
 		}
 		src := b.String()
 
-		tokens, err := newScanner([]byte(src)).scan()
+		sc, err := newScanner([]byte(src))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		tokens, err := sc.scan()
 		if err != nil {
 			t.Fatalf("scan: %v", err)
 		}
@@ -1072,7 +1076,11 @@ func TestParseMaxNodes(t *testing.T) {
 
 	t.Run("within maxNodes succeeds", func(t *testing.T) {
 		src := "a = 1\nb = 2\n"
-		tokens, err := newScanner([]byte(src)).scan()
+		sc, err := newScanner([]byte(src))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		tokens, err := sc.scan()
 		if err != nil {
 			t.Fatalf("scan: %v", err)
 		}
@@ -1086,7 +1094,11 @@ func TestParseMaxNodes(t *testing.T) {
 
 	t.Run("maxNodes zero means no limit", func(t *testing.T) {
 		src := "a = 1\nb = 2\nc = 3\n"
-		tokens, err := newScanner([]byte(src)).scan()
+		sc, err := newScanner([]byte(src))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		tokens, err := sc.scan()
 		if err != nil {
 			t.Fatalf("scan: %v", err)
 		}

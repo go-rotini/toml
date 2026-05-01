@@ -3,7 +3,6 @@ package toml
 import (
 	"bytes"
 	"fmt"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -34,15 +33,19 @@ type scanner struct {
 	nestStack []nestKind
 }
 
-func newScanner(src []byte) *scanner {
+func newScanner(src []byte) (*scanner, error) {
 	src = stripBOM(src)
-	src = normalizeCRLF(src)
+	var err error
+	src, err = normalizeCRLF(src)
+	if err != nil {
+		return nil, err
+	}
 	return &scanner{
 		src:         src,
 		line:        1,
 		col:         1,
 		atLineStart: true,
-	}
+	}, nil
 }
 
 func stripBOM(src []byte) []byte {
@@ -52,27 +55,36 @@ func stripBOM(src []byte) []byte {
 	return src
 }
 
-func normalizeCRLF(src []byte) []byte {
+func normalizeCRLF(src []byte) ([]byte, error) {
 	if !bytes.ContainsRune(src, '\r') {
-		return src
+		return src, nil
 	}
 	buf := make([]byte, 0, len(src))
+	line := 1
 	for i := 0; i < len(src); i++ {
 		if src[i] == '\r' {
 			if i+1 < len(src) && src[i+1] == '\n' {
 				continue
 			}
-			buf = append(buf, '\n')
-		} else {
-			buf = append(buf, src[i])
+			return nil, &SyntaxError{
+				Message: "bare carriage return not allowed",
+				Pos:     Position{Line: line, Column: i + 1},
+			}
 		}
+		if src[i] == '\n' {
+			line++
+		}
+		buf = append(buf, src[i])
 	}
-	return buf
+	return buf, nil
 }
 
 // Valid reports whether data is valid TOML.
 func Valid(data []byte) bool {
-	s := newScanner(data)
+	s, err := newScanner(data)
+	if err != nil {
+		return false
+	}
 	tokens, err := s.scan()
 	if err != nil {
 		return false
@@ -272,14 +284,7 @@ func (s *scanner) scanBareKey() error {
 }
 
 func isBareKeyChar(r rune) bool {
-	if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
-		return true
-	}
-	// TOML 1.1.0: Unicode letters and digits
-	if r > 127 && (unicode.IsLetter(r) || unicode.IsDigit(r)) {
-		return true
-	}
-	return false
+	return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_'
 }
 
 func (s *scanner) scanBasicString() error {
@@ -365,13 +370,16 @@ func (s *scanner) scanMultiLineBasicString() error {
 		if ch == '\\' {
 			// Check for line-ending backslash
 			saved := s.pos
+			savedCol := s.col
 			s.advance() // consume backslash
 			if !s.atEnd() && (s.peek() == '\n' || s.peek() == ' ' || s.peek() == '\t') {
-				s.trimLineContinuation()
+				if ok := s.trimLineContinuation(); !ok {
+					return s.syntaxError("invalid escape: backslash followed by whitespace without newline")
+				}
 				continue
 			}
 			s.pos = saved
-			s.col-- // restore
+			s.col = savedCol
 			r, err := s.scanEscape()
 			if err != nil {
 				return err
@@ -398,10 +406,12 @@ func (s *scanner) scanMultiLineBasicString() error {
 	return s.syntaxError("unterminated multi-line basic string")
 }
 
-func (s *scanner) trimLineContinuation() {
+func (s *scanner) trimLineContinuation() bool {
+	foundNewline := false
 	for !s.atEnd() {
 		ch := s.peek()
 		if ch == '\n' {
+			foundNewline = true
 			s.advance()
 			continue
 		}
@@ -411,6 +421,7 @@ func (s *scanner) trimLineContinuation() {
 		}
 		break
 	}
+	return foundNewline
 }
 
 func (s *scanner) scanLiteralString() error {
@@ -645,12 +656,14 @@ func (s *scanner) scanNumberOrDateTime() error {
 	if s.peek() == '0' && s.pos+1 < len(s.src) {
 		next := s.src[s.pos+1]
 		switch next {
-		case 'x', 'X':
+		case 'x':
 			return s.scanPrefixedInt(16, "0x")
-		case 'o', 'O':
+		case 'o':
 			return s.scanPrefixedInt(8, "0o")
-		case 'b', 'B':
+		case 'b':
 			return s.scanPrefixedInt(2, "0b")
+		case 'X', 'O', 'B':
+			return s.syntaxError(fmt.Sprintf("invalid prefix 0%c, must be lowercase", next))
 		}
 	}
 	return s.scanNumberFrom(s.pos, false)
@@ -734,6 +747,9 @@ func (s *scanner) scanNumberFrom(start int, hasSigned bool) error {
 
 	// Float with decimal or exponent
 	if ch == '.' {
+		if err := checkLeadingZeros(digitsOnly); err != nil {
+			return s.syntaxError(err.Error())
+		}
 		s.advance()
 		if s.atEnd() || s.peek() < '0' || s.peek() > '9' {
 			return s.syntaxError("expected digit after decimal point")
@@ -749,6 +765,9 @@ func (s *scanner) scanNumberFrom(start int, hasSigned bool) error {
 	}
 
 	if ch == 'e' || ch == 'E' {
+		if err := checkLeadingZeros(digitsOnly); err != nil {
+			return s.syntaxError(err.Error())
+		}
 		if err := s.scanExponent(); err != nil {
 			return err
 		}
@@ -831,7 +850,7 @@ func (s *scanner) scanDateTime(start int) error {
 
 	s.advance() // consume T or space
 
-	// Scan time: HH:MM:SS
+	// Scan time: HH:MM[:SS[.frac]]
 	if err := s.expectDigits(2); err != nil {
 		return err
 	}
@@ -841,21 +860,21 @@ func (s *scanner) scanDateTime(start int) error {
 	if err := s.expectDigits(2); err != nil {
 		return err
 	}
-	if !s.expect(':') {
-		return s.syntaxError("expected ':' in time")
-	}
-	if err := s.expectDigits(2); err != nil {
-		return err
-	}
-
-	// Fractional seconds
-	if !s.atEnd() && s.peek() == '.' {
+	if !s.atEnd() && s.peek() == ':' {
 		s.advance()
-		if s.atEnd() || s.peek() < '0' || s.peek() > '9' {
-			return s.syntaxError("expected digit in fractional seconds")
+		if err := s.expectDigits(2); err != nil {
+			return err
 		}
-		for !s.atEnd() && s.peek() >= '0' && s.peek() <= '9' {
+
+		// Fractional seconds
+		if !s.atEnd() && s.peek() == '.' {
 			s.advance()
+			if s.atEnd() || s.peek() < '0' || s.peek() > '9' {
+				return s.syntaxError("expected digit in fractional seconds")
+			}
+			for !s.atEnd() && s.peek() >= '0' && s.peek() <= '9' {
+				s.advance()
+			}
 		}
 	}
 
@@ -872,15 +891,24 @@ func (s *scanner) scanDateTime(start int) error {
 		return nil
 	}
 	if ch == '+' || ch == '-' {
+		offStart := s.pos
 		s.advance()
 		if err := s.expectDigits(2); err != nil {
 			return err
+		}
+		offHour := (s.src[offStart+1]-'0')*10 + (s.src[offStart+2] - '0')
+		if offHour > 23 {
+			return s.syntaxError("timezone offset hour out of range")
 		}
 		if !s.expect(':') {
 			return s.syntaxError("expected ':' in timezone offset")
 		}
 		if err := s.expectDigits(2); err != nil {
 			return err
+		}
+		offMin := (s.src[s.pos-2]-'0')*10 + (s.src[s.pos-1] - '0')
+		if offMin > 59 {
+			return s.syntaxError("timezone offset minute out of range")
 		}
 		s.emit(tokenOffsetDateTime, string(s.src[start:s.pos]))
 		return nil
@@ -891,18 +919,18 @@ func (s *scanner) scanDateTime(start int) error {
 }
 
 func (s *scanner) scanLocalTime(start int) error {
-	// We've scanned HH, now scan :MM:SS[.fractional]
+	// We've scanned HH, now scan :MM[:SS[.fractional]]
 	if !s.expect(':') {
 		return s.syntaxError("expected ':' in time")
 	}
 	if err := s.expectDigits(2); err != nil {
 		return err
 	}
-	if !s.expect(':') {
-		return s.syntaxError("expected ':' in time")
-	}
-	if err := s.expectDigits(2); err != nil {
-		return err
+	if !s.atEnd() && s.peek() == ':' {
+		s.advance()
+		if err := s.expectDigits(2); err != nil {
+			return err
+		}
 	}
 	// Fractional seconds
 	if !s.atEnd() && s.peek() == '.' {
