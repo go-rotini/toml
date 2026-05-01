@@ -1,29 +1,27 @@
-# toml
+# go-rotini/toml
 
-A Go TOML encoding and decoding package that implements the [TOML 1.1.0 specification](https://toml.io/en/v1.1.0) backed by the [TOML Test Suite]() conformance tests.
+A Go TOML encoding and decoding package that implements the [TOML 1.1.0 specification](https://toml.io/en/v1.1.0) backed by the [TOML Test Suite](https://github.com/toml-lang/toml-test) conformance tests.
 
 This package is used as the default TOML support package for [rotini](https://github.com/go-rotini/rotini).
 
 ## Features
 
-- **TOML 1.1.0 compliant** — Unicode bare keys, `\e`/`\xHH` escapes, inline table newlines and trailing commas
-- **Zero runtime dependencies** — only the Go standard library
-- **`encoding/json`-style API** — `Marshal`/`Unmarshal`, `Encoder`/`Decoder`, struct tags
-- **Generic API** — `UnmarshalTo[T]()` for type-safe decoding
-- **AST access** — `Parse()` returns a mutable node tree; inspect, modify, and re-serialize
-- **Path queries** — `PathString("$.server.ports[0]")` for reading and mutating the AST
-- **Comment preservation** — head and line comments survive round-trips through the AST
-- **JSON conversion** — `ToJSON()` and `FromJSON()` for interop
-- **Rich struct tags** — `omitempty`, `inline`, `multiline`, `literal`, `commented`, `hex`/`octal`/`binary`, `required`, `default=<value>`
-- **Custom marshalers** — `Marshaler`, `BytesMarshaler`, `MarshalerContext` (with context)
-- **Struct validation** — `WithValidator()` for post-decode validation
-- **Strict mode** — `WithStrict()` rejects unknown keys
-- **Ordered maps** — `WithOrderedMap()` returns `MapSlice` preserving key order
-- **DoS protection** — `WithMaxDepth()`, `WithMaxKeys()`, `WithMaxDocumentSize()`, `WithMaxNodes()`
-- **Error formatting** — `FormatError()` with source line and caret pointer
-- **Local date/time types** — `LocalDate`, `LocalTime`, `LocalDateTime`
-- **Deferred decoding** — `RawValue` for lazy unmarshaling
-- **File decoding** — `DecodeFile()` reads directly from disk
+- Full [TOML 1.1.0](https://toml.io/en/v1.1.0) specification support including Unicode bare keys, `\e`/`\xHH` escapes, inline table newlines, and trailing commas
+- Tested against the official [TOML Test Suite](https://github.com/toml-lang/toml-test) for conformance
+- Generic `UnmarshalTo[T]` API and type-safe custom marshaler/unmarshaler registration
+- Multi-document streaming with `Encoder`/`Decoder`
+- Struct field tags: `omitempty`, `inline`, `multiline`, `literal`, `commented`, `hex`/`octal`/`binary`, `required`, `default=<value>`
+- Encode options: indent, indent tables, inline tables, multiline arrays, literal strings, table separators, comments
+- Decode options: strict mode, ordered maps, struct validation, local time zone, JSON unmarshaler fallback
+- AST access via `Parse`, `Walk`, `Filter`, and `Node` tree manipulation
+- JSONPath-like query engine (`PathString`) with read, replace, append, and delete operations
+- Bidirectional JSON conversion (`ToJSON`/`FromJSON`)
+- `Valid` function for quick syntax validation without full decoding
+- `FormatError` for human-readable error output with source line and column pointer
+- Context-aware encoding/decoding via `EncodeContext`/`DecodeContext`
+- Local date/time types: `LocalDate`, `LocalTime`, `LocalDateTime`
+- Deferred decoding with `RawValue` and file decoding with `DecodeFile`
+- DoS protection: depth limiting, key count limiting, document size limiting, node count limiting
 
 ## Installation
 
@@ -40,6 +38,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+
 	"github.com/go-rotini/toml"
 )
 
@@ -60,29 +60,35 @@ type Database struct {
 }
 
 func main() {
-    input := `
-title = "Example"
-
-[owner]
-name = "Alice"
-
-[database]
-ports = [8000, 8001, 8002]
-enabled = true
-connection_max = 5000
-`
-	// Unmarshal
-	var cfg Config
-	if err := toml.Unmarshal([]byte(input), &cfg); err != nil {
-		fmt.Fatal(err)
-	}
-	fmt.Println(cfg.Title)
-	fmt.Println(cfg.Owner.Name)
-	fmt.Println(cfg.Database.Ports)
-
 	// Marshal
-	out, _ := toml.Marshal(cfg)
-	fmt.Println(string(out))
+	cfg := Config{
+		Title: "Example",
+		Owner: Owner{Name: "Alice"},
+		Database: Database{
+			Ports:   []int{8000, 8001, 8002},
+			Enabled: true,
+			ConnMax: 5000,
+		},
+	}
+	b, err := toml.Marshal(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(b))
+
+	// Unmarshal
+	var cfg2 Config
+	if err := toml.Unmarshal(b, &cfg2); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v\n", cfg2)
+
+	// Generic unmarshal (no pointer required)
+	cfg3, err := toml.UnmarshalTo[Config](b)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v\n", cfg3)
 }
 ```
 

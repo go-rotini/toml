@@ -8,28 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 0.1.0
 
 ### Added
-- Full TOML 1.1.0 scanner, parser, encoder, and decoder
-- `Marshal`/`Unmarshal` with struct tag support (`omitempty`, `inline`, `multiline`, `literal`, `commented`, `hex`, `octal`, `binary`, `required`, `default=<value>`)
-- `UnmarshalTo[T]()` generic API
-- `Encoder`/`Decoder` streaming types with context support
-- `DecodeFile()` for reading TOML files from disk
-- `Parse()` for AST access with `Walk()`, `Filter()`, `NodeToBytes()`
-- `PathString()` path query system with `Read()`, `ReadString()`, `Replace()`, `Append()`, `Delete()`
-- `ToJSON()`/`FromJSON()` conversion utilities
-- `FormatError()` with source line and caret pointer
-- `Valid()` quick validation
-- `LocalDate`, `LocalTime`, `LocalDateTime` types
-- `MapSlice`/`MapItem` for ordered map support
-- `RawValue` for deferred decoding
-- Custom marshaler/unmarshaler interfaces (`Marshaler`, `BytesMarshaler`, `MarshalerContext`, `Unmarshaler`, `BytesUnmarshaler`, `UnmarshalerContext`)
-- `WithCustomMarshaler[T]()` and `WithCustomUnmarshaler[T]()` option-based custom codecs
-- `StructValidator` interface for post-decode validation
-- Functional options: `WithStrict()`, `WithDefaults()`, `WithOrderedMap()`, `WithMaxDepth()`, `WithMaxKeys()`, `WithMaxDocumentSize()`, `WithMaxNodes()`, `WithLocalTimeZone()`, and more
+- TOML 1.1.0 scanner, parser, encoder, and decoder
+- Marshal/Unmarshal with struct tag support
+- Generic UnmarshalTo[T] API
+- Multi-document streaming via Encoder/Decoder
+- TOMLPath query engine
+- ToJSON and FromJSON helpers
+- AST access via Parse, Walk, Filter, and NodeToBytes
 - Comment preservation through AST round-trips
-- TOML 1.1.0 features: Unicode bare keys, `\e`/`\xHH` escape sequences, inline table newlines, trailing commas in inline tables and arrays
-- DoS protection: depth limiting, key count limiting, document size limiting, node count limiting
-- `comment:"text"` struct tag for attaching comments to encoded output
-- Acceptance tests with real-world TOML files (Cargo.toml, pyproject.toml, Hugo config)
-- Fuzz tests (FuzzUnmarshal, FuzzScanner, FuzzRoundTrip, FuzzValid)
-- Example tests for all major public functions
-- 663+ unit tests
+- LocalDate, LocalTime, LocalDateTime types
+- MapSlice/MapItem for ordered map support
+- RawValue for deferred decoding
+- DecodeFile for reading TOML files from disk
+- Custom marshaler/unmarshaler interfaces and option-based registration
+- Struct validation via StructValidator interface
+- Fuzz testing corpus
+- TOML test suite conformance tests
+- DoS protection defaults; max nesting depth 100, max keys and document size configurable

@@ -1,7 +1,6 @@
 TEST_SUITE_DIR := testdata/toml-test
 TEST_SUITE_REPO := https://github.com/toml-lang/toml-test.git
-TEST_SUITE_TAG := $(shell git ls-remote --tags $(TEST_SUITE_REPO) 'refs/tags/v*' \
-    | grep -v '\^{}' | sed 's|.*refs/tags/||' | sort -V | tail -1)
+TEST_SUITE_TAG := $(shell git ls-remote --tags $(TEST_SUITE_REPO) 'refs/tags/v*' | grep -v '\^{}' | sed 's|.*refs/tags/||' | sort -V | tail -1)
 
 .PHONY: all clean clone-test-suite lint test test-acceptance test-bench test-conformance test-fuzz test-mutation test-race
 
@@ -42,6 +41,7 @@ test-fuzz:
 	@go test -fuzz=FuzzUnmarshal -fuzztime=60s .
 	@go test -fuzz=FuzzScanner -fuzztime=60s .
 	@go test -fuzz=FuzzRoundTrip -fuzztime=60s .
+	@go test -fuzz=FuzzValid -fuzztime=60s .
 
 test-mutation: clone-test-suite
 	@go tool github.com/go-gremlins/gremlins/cmd/gremlins unleash --config .gremlins.yaml
