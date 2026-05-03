@@ -29,7 +29,7 @@ This package is used as the default TOML support package for [rotini](https://gi
 go get github.com/go-rotini/toml
 ```
 
-Requires Go 1.23 or later.
+Requires Go 1.26 or later.
 
 ## Quick Start
 
