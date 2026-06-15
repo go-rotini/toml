@@ -138,6 +138,75 @@ func PathString(expr string) (*Path, error) {
 	return p, nil
 }
 
+// PathPointer compiles an RFC 6901 JSON Pointer into a [Path]. The empty
+// string selects the document root; any other pointer must begin with "/".
+// Reference tokens are unescaped per RFC 6901 ("~1" → "/", then "~0" → "~").
+//
+// A JSON Pointer token can address either a table key or an array index — the
+// document decides which — so each token resolves as a key first and, when it
+// is a non-negative integer and no key matched, as an array index. (An array
+// of tables written as [[name]] is addressed by its key; indexing across
+// multiple [[name]] entries is not supported.)
+//
+// Returns [ErrPointerSyntax] (wrapped) when a non-empty pointer does not begin
+// with "/".
+func PathPointer(ptr string) (*Path, error) {
+	p := &Path{raw: ptr}
+	if ptr == "" {
+		return p, nil
+	}
+	if ptr[0] != '/' {
+		return nil, fmt.Errorf("%w: pointer must start with /", ErrPointerSyntax)
+	}
+	for tok := range strings.SplitSeq(ptr[1:], "/") {
+		key := decodePointerToken(tok)
+		seg := pointerSegment{key: key}
+		if i, err := strconv.Atoi(key); err == nil && i >= 0 {
+			seg.index, seg.hasIndex = i, true
+		}
+		p.segments = append(p.segments, seg)
+	}
+	return p, nil
+}
+
+// decodePointerToken applies the RFC 6901 unescaping rules to one reference
+// token: "~1" → "/" then "~0" → "~" (order matters).
+func decodePointerToken(tok string) string {
+	tok = strings.ReplaceAll(tok, "~1", "/")
+	tok = strings.ReplaceAll(tok, "~0", "~")
+	return tok
+}
+
+// pointerSegment resolves a single RFC 6901 reference token. A JSON Pointer
+// leaves array-vs-table resolution to the document, so the token matches a
+// key first and falls back to an array index when it is numeric.
+type pointerSegment struct {
+	key      string
+	index    int
+	hasIndex bool
+}
+
+func (s pointerSegment) match(n *Node) []*Node {
+	for _, child := range n.Children {
+		if len(child.Key) > 0 && child.Key[len(child.Key)-1] == s.key {
+			return []*Node{pointerValue(child)}
+		}
+	}
+	if s.hasIndex && s.index >= 0 && s.index < len(n.Children) {
+		return []*Node{pointerValue(n.Children[s.index])}
+	}
+	return nil
+}
+
+// pointerValue unwraps a key/value pair to its value node so a subsequent
+// pointer token descends into the value rather than the pair.
+func pointerValue(n *Node) *Node {
+	if n.Kind == KeyValueNode && len(n.Children) > 0 {
+		return n.Children[0]
+	}
+	return n
+}
+
 // Read returns all nodes matching the path expression.
 func (p *Path) Read(n *Node) ([]*Node, error) {
 	if n == nil {
