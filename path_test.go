@@ -936,3 +936,95 @@ func TestPathReplaceIntermediateMissing(t *testing.T) {
 		t.Errorf("Replace with missing intermediate: error = %v, want ErrPathNotFound", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// PathPointer (RFC 6901)
+// ---------------------------------------------------------------------------
+
+func TestPathPointerKeyAndIndex(t *testing.T) {
+	root := mustParse(t, `
+[server]
+ports = [80, 443, 8080]
+`)
+	p, err := PathPointer("/server/ports/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.ReadString(root)
+	if err != nil {
+		t.Fatalf("ReadString: %v", err)
+	}
+	if got != "443" {
+		t.Errorf("got %q, want 443", got)
+	}
+}
+
+func TestPathPointerArrayOfInlineTables(t *testing.T) {
+	root := mustParse(t, `flags = [{name = "x"}, {name = "y"}]`)
+	p, _ := PathPointer("/flags/1/name")
+	got, err := p.ReadString(root)
+	if err != nil {
+		t.Fatalf("ReadString: %v", err)
+	}
+	if got != "y" {
+		t.Errorf("got %q, want y", got)
+	}
+}
+
+func TestPathPointerNestedTablePositions(t *testing.T) {
+	root := mustParse(t, `
+[server]
+host = "h"
+`)
+	p, _ := PathPointer("/server/host")
+	positions, err := p.ReadPositions(root)
+	if err != nil {
+		t.Fatalf("ReadPositions: %v", err)
+	}
+	if len(positions) != 1 || positions[0].Line <= 0 {
+		t.Errorf("got positions %+v", positions)
+	}
+}
+
+func TestPathPointerEmptySelectsRoot(t *testing.T) {
+	root := mustParse(t, `a = 1`)
+	p, err := PathPointer("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := p.Read(root)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Kind != TableNode {
+		t.Errorf("empty pointer should select the root table, got %+v", nodes)
+	}
+}
+
+func TestPathPointerEscapes(t *testing.T) {
+	// Keys containing "/" and "~" are encoded as ~1 and ~0 in the pointer.
+	root := mustParse(t, `"a/b" = 1
+"c~d" = 2`)
+	p1, _ := PathPointer("/a~1b")
+	if got, err := p1.ReadString(root); err != nil || got != "1" {
+		t.Errorf("/a~1b = %q (err %v); want 1", got, err)
+	}
+	p2, _ := PathPointer("/c~0d")
+	if got, err := p2.ReadString(root); err != nil || got != "2" {
+		t.Errorf("/c~0d = %q (err %v); want 2", got, err)
+	}
+}
+
+func TestPathPointerInvalid(t *testing.T) {
+	if _, err := PathPointer("foo"); !errors.Is(err, ErrPointerSyntax) {
+		t.Errorf("expected ErrPointerSyntax, got %v", err)
+	}
+}
+
+func TestPathPointerNotFound(t *testing.T) {
+	root := mustParse(t, `k = 1`)
+	p, _ := PathPointer("/missing")
+	if _, err := p.ReadPositions(root); !errors.Is(err, ErrPathNotFound) {
+		t.Errorf("error = %v, want ErrPathNotFound", err)
+	}
+}

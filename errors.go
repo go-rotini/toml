@@ -197,6 +197,8 @@ var (
 	ErrPathSyntax = errors.New("toml: invalid path syntax")
 	// ErrPathNotFound indicates no node matched a [Path] query.
 	ErrPathNotFound = errors.New("toml: path not found")
+	// ErrPointerSyntax indicates an invalid RFC 6901 JSON Pointer passed to [PathPointer].
+	ErrPointerSyntax = errors.New("toml: invalid JSON Pointer syntax")
 	// ErrNilPointer indicates a nil pointer was passed where a non-nil pointer is required.
 	ErrNilPointer = errors.New("toml: non-nil pointer required")
 	// ErrDocumentSize indicates the input exceeds the configured [WithMaxDocumentSize] limit.
