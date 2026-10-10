@@ -1,6 +1,7 @@
 package toml
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -74,10 +75,45 @@ func FuzzRoundTrip(f *testing.F) {
 			t.Fatalf("re-Unmarshal failed: %v\noriginal input:\n%s\nre-marshaled:\n%s", err, data, encoded)
 		}
 
-		if !reflect.DeepEqual(m1, m2) {
+		if !roundTripEqual(m1, m2) {
 			t.Fatalf("round-trip mismatch\noriginal:     %#v\nre-marshaled: %#v\nencoded TOML:\n%s", m1, m2, encoded)
 		}
 	})
+}
+
+// roundTripEqual is reflect.DeepEqual, except that two NaN floats are equal: NaN never
+// equals itself, but `nan` decoding to NaN on both sides is a correct round trip.
+func roundTripEqual(a, b any) bool {
+	switch av := a.(type) {
+	case float64:
+		bv, ok := b.(float64)
+		return ok && (av == bv || (math.IsNaN(av) && math.IsNaN(bv)))
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for k, v := range av {
+			w, ok := bv[k]
+			if !ok || !roundTripEqual(v, w) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !roundTripEqual(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(a, b)
+	}
 }
 
 // FuzzValid feeds random bytes to Valid. It must never panic.
