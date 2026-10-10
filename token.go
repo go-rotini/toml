@@ -38,7 +38,7 @@ type token struct {
 	kind  tokenKind
 	start int32 // offset in the normalized source where the token begins
 	value string
-	pos   Position // where the token ends, except for one-byte punctuation, where it begins
+	pos   Position // where the token ends; where it begins for a newline and for = . , { } and a value's [ ]
 }
 
 func (t token) String() string {

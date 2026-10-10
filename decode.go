@@ -264,7 +264,7 @@ func (d *decoder) decodeTableToMap(n *node, rv reflect.Value) error {
 				}
 				existing := rv.MapIndex(mapKey)
 				if existing.IsValid() && existing.Elem().IsValid() {
-					if arr, ok := existing.Elem().Interface().([]any); ok {
+					if arr, ok := reflect.TypeAssert[[]any](existing.Elem()); ok {
 						rv.SetMapIndex(mapKey, reflect.ValueOf(append(arr, m)))
 					} else {
 						rv.SetMapIndex(mapKey, reflect.ValueOf([]any{existing.Elem().Interface(), m}))
@@ -413,7 +413,7 @@ func (d *decoder) decodeValue(n *node, rv reflect.Value) error {
 			ptr := reflect.New(rv.Type())
 			result := reflect.ValueOf(fn).Call([]reflect.Value{ptr, reflect.ValueOf(raw)})
 			if !result[0].IsNil() {
-				if err, ok := result[0].Interface().(error); ok {
+				if err, ok := reflect.TypeAssert[error](result[0]); ok {
 					return err
 				}
 			}
@@ -909,12 +909,12 @@ func setInterface(target, value any) error {
 
 func setTextUnmarshalerKey(rv reflect.Value, key string) error {
 	if rv.CanAddr() {
-		if u, ok := rv.Addr().Interface().(encoding.TextUnmarshaler); ok {
+		if u, ok := reflect.TypeAssert[encoding.TextUnmarshaler](rv.Addr()); ok {
 			return u.UnmarshalText([]byte(key))
 		}
 	}
 	ptr := reflect.New(rv.Type())
-	if u, ok := ptr.Interface().(encoding.TextUnmarshaler); ok {
+	if u, ok := reflect.TypeAssert[encoding.TextUnmarshaler](ptr); ok {
 		if err := u.UnmarshalText([]byte(key)); err != nil {
 			return err
 		}

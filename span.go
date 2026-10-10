@@ -14,7 +14,9 @@ import (
 //
 // Span offsets index the bytes passed to [Parse], including a leading
 // byte-order mark and the \r of each \r\n line ending; Line and Column are
-// 1-based, with Column counted in characters.
+// 1-based, with Column counted in characters. These differ from [Node.Pos]
+// and [SyntaxError] positions, which mark a token's end, count columns in
+// bytes, and index the source after byte-order mark and \r\n normalization.
 //
 // What a node's Span covers depends on its kind:
 //   - a scalar: the literal with its quotes or delimiters, all lines of a
@@ -29,6 +31,9 @@ import (
 // A node with no source text of its own, such as the root table or a table
 // implied by a dotted key or a nested header, has a zero Span. So does every
 // node of a document larger than 2 GiB.
+//
+// Spans describe the input to [Parse]; they are not updated when a node is
+// modified or re-encoded.
 type Span struct {
 	Start Position
 	End   Position
