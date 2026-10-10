@@ -6,7 +6,8 @@
 //
 // For low-level AST access, [Parse] returns a [File] containing a [Node] tree
 // that can be inspected, mutated with [Path] queries, and re-serialized with
-// [NodeToBytes].
+// [NodeToBytes]. Each parsed node also carries its [Span] in the source, so a
+// value can be replaced in place without disturbing comments or layout.
 //
 // # Struct Tags
 //

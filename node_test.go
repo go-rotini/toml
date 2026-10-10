@@ -482,7 +482,7 @@ func TestNodeExportImportRoundTrip(t *testing.T) {
 	}
 
 	// Export to public Node.
-	pub := exportNode(internal)
+	pub := exportNode(internal, (&scanner{}).spanOf)
 	if pub.Kind != TableNode {
 		t.Errorf("exported Kind = %d, want TableNode", pub.Kind)
 	}
@@ -535,8 +535,8 @@ func TestNodeExportImportRoundTrip(t *testing.T) {
 }
 
 func TestNodeExportImportNil(t *testing.T) {
-	if exportNode(nil) != nil {
-		t.Error("exportNode(nil) should return nil")
+	if exportNode(nil, (&scanner{}).spanOf) != nil {
+		t.Error("exportNode(nil, (&scanner{}).spanOf) should return nil")
 	}
 	if importNode(nil) != nil {
 		t.Error("importNode(nil) should return nil")
@@ -791,13 +791,13 @@ func TestNodeStringBoolean(t *testing.T) {
 
 func TestNodeInlineFlag(t *testing.T) {
 	internal := &node{kind: nodeInlineTable}
-	pub := exportNode(internal)
+	pub := exportNode(internal, (&scanner{}).spanOf)
 	if !pub.Inline {
 		t.Error("Inline should be true for nodeInlineTable")
 	}
 
 	internal2 := &node{kind: nodeTable}
-	pub2 := exportNode(internal2)
+	pub2 := exportNode(internal2, (&scanner{}).spanOf)
 	if pub2.Inline {
 		t.Error("Inline should be false for nodeTable")
 	}
@@ -814,7 +814,7 @@ func TestNodeFootCommentRoundTrip(t *testing.T) {
 		footComment: "footer",
 		children:    []*node{{kind: nodeString, value: "v"}},
 	}
-	pub := exportNode(internal)
+	pub := exportNode(internal, (&scanner{}).spanOf)
 	if pub.FootComment != "footer" {
 		t.Errorf("FootComment = %q, want %q", pub.FootComment, "footer")
 	}
@@ -871,7 +871,7 @@ func TestNodeExportNodePreservesChildOrder(t *testing.T) {
 			{kind: nodeKeyValue, key: []string{"third"}, children: []*node{{kind: nodeInteger, value: "3"}}},
 		},
 	}
-	pub := exportNode(internal)
+	pub := exportNode(internal, (&scanner{}).spanOf)
 	if len(pub.Children) != 3 {
 		t.Fatalf("Children = %d, want 3", len(pub.Children))
 	}

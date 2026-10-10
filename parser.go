@@ -106,11 +106,13 @@ func (p *parser) parseComment() {
 func (p *parser) parseTable() error {
 	headComment := p.consumeHeadComment()
 
+	open := p.peek()
 	p.advance() // consume TableStart
 	keys, err := p.parseKeyPath()
 	if err != nil {
 		return err
 	}
+	closing := p.peek()
 	if !p.expectToken(tokenTableEnd) {
 		return p.syntaxError("expected ]")
 	}
@@ -151,6 +153,8 @@ func (p *parser) parseTable() error {
 	target.kind = nodeTable
 	target.headComment = headComment
 	target.comment = lineComment
+	target.span = srcSpan{start: int(open.start), end: closing.pos.Offset}
+	target.keySpan = keyPathSpan(keys)
 	p.current = target
 	p.currentPath = path
 	return nil
@@ -159,11 +163,13 @@ func (p *parser) parseTable() error {
 func (p *parser) parseArrayTable() error {
 	headComment := p.consumeHeadComment()
 
+	open := p.peek()
 	p.advance() // consume ArrayTableStart
 	keys, err := p.parseKeyPath()
 	if err != nil {
 		return err
 	}
+	closing := p.peek()
 	if !p.expectToken(tokenArrayTableEnd) {
 		return p.syntaxError("expected ]]")
 	}
@@ -222,6 +228,8 @@ func (p *parser) parseArrayTable() error {
 		pos:         keys[0].pos,
 		headComment: headComment,
 		comment:     lineComment,
+		span:        srcSpan{start: int(open.start), end: closing.pos.Offset},
+		keySpan:     keyPathSpan(keys),
 	}
 	parent.children = append(parent.children, entry)
 	p.current = entry
@@ -291,6 +299,8 @@ func (p *parser) parseKeyValue() error {
 		pos:         keys[0].pos,
 		headComment: headComment,
 		comment:     lineComment,
+		span:        srcSpan{start: int(keys[0].start), end: value.span.end},
+		keySpan:     keyPathSpan(keys),
 	}
 	kv.children = append(kv.children, value)
 
@@ -351,37 +361,37 @@ func (p *parser) parseValueNode() (*node, error) {
 	switch tok.kind {
 	case tokenBasicString:
 		p.advance()
-		return &node{kind: nodeString, value: tok.value, style: styleBasic, pos: tok.pos}, nil
+		return &node{kind: nodeString, value: tok.value, style: styleBasic, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenMultiLineBasicString:
 		p.advance()
-		return &node{kind: nodeString, value: tok.value, style: styleMultiLineBasic, pos: tok.pos}, nil
+		return &node{kind: nodeString, value: tok.value, style: styleMultiLineBasic, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenLiteralString:
 		p.advance()
-		return &node{kind: nodeString, value: tok.value, style: styleLiteral, pos: tok.pos}, nil
+		return &node{kind: nodeString, value: tok.value, style: styleLiteral, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenMultiLineLiteralString:
 		p.advance()
-		return &node{kind: nodeString, value: tok.value, style: styleMultiLineLiteral, pos: tok.pos}, nil
+		return &node{kind: nodeString, value: tok.value, style: styleMultiLineLiteral, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenInteger:
 		p.advance()
-		return &node{kind: nodeInteger, value: tok.value, pos: tok.pos}, nil
+		return &node{kind: nodeInteger, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenFloat:
 		p.advance()
-		return &node{kind: nodeFloat, value: tok.value, pos: tok.pos}, nil
+		return &node{kind: nodeFloat, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenBoolean:
 		p.advance()
-		return &node{kind: nodeBoolean, value: tok.value, pos: tok.pos}, nil
+		return &node{kind: nodeBoolean, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenOffsetDateTime:
 		p.advance()
-		return &node{kind: nodeDateTime, value: tok.value, pos: tok.pos}, nil
+		return &node{kind: nodeDateTime, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenLocalDateTime:
 		p.advance()
-		return &node{kind: nodeLocalDateTime, value: tok.value, pos: tok.pos}, nil
+		return &node{kind: nodeLocalDateTime, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenLocalDate:
 		p.advance()
-		return &node{kind: nodeLocalDate, value: tok.value, pos: tok.pos}, nil
+		return &node{kind: nodeLocalDate, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenLocalTime:
 		p.advance()
-		return &node{kind: nodeLocalTime, value: tok.value, pos: tok.pos}, nil
+		return &node{kind: nodeLocalTime, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenArrayStart:
 		return p.parseArray()
 	case tokenInlineTableStart:
@@ -392,7 +402,8 @@ func (p *parser) parseValueNode() (*node, error) {
 }
 
 func (p *parser) parseArray() (*node, error) {
-	start := p.peek().pos
+	open := p.peek()
+	start := open.pos
 	p.advance() // consume [
 	arr := &node{kind: nodeArray, pos: start}
 
@@ -411,14 +422,17 @@ func (p *parser) parseArray() (*node, error) {
 			return nil, p.syntaxError("expected comma or ] in array")
 		}
 	}
+	closing := p.peek()
 	if !p.expectToken(tokenArrayEnd) {
 		return nil, p.syntaxError("expected ]")
 	}
+	arr.span = srcSpan{start: int(open.start), end: int(closing.start) + 1}
 	return arr, nil
 }
 
 func (p *parser) parseInlineTable() (*node, error) {
-	start := p.peek().pos
+	open := p.peek()
+	start := open.pos
 	p.advance() // consume {
 	tbl := &node{kind: nodeInlineTable, pos: start}
 
@@ -480,6 +494,8 @@ func (p *parser) parseInlineTable() (*node, error) {
 			key:      []string{lastKey},
 			pos:      keys[0].pos,
 			children: []*node{val},
+			span:     srcSpan{start: int(keys[0].start), end: val.span.end},
+			keySpan:  keyPathSpan(keys),
 		}
 		target.children = append(target.children, kv)
 		p.skipNewlinesAndComments()
@@ -488,9 +504,11 @@ func (p *parser) parseInlineTable() (*node, error) {
 			p.skipNewlinesAndComments()
 		}
 	}
+	closing := p.peek()
 	if !p.expectToken(tokenInlineTableEnd) {
 		return nil, p.syntaxError("expected }")
 	}
+	tbl.span = srcSpan{start: int(open.start), end: int(closing.start) + 1}
 	return tbl, nil
 }
 

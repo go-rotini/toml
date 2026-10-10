@@ -23,12 +23,17 @@ type scanner struct {
 	atLineStart bool // [ at line start is a table header, not an array
 	inValue     bool
 	nestStack   []nestKind
+
+	tokStart   int   // offset in src where the token being scanned begins
+	bomLen     int   // bytes of byte-order mark removed from the input
+	crlf       []int // offsets in src of each \n whose preceding \r was removed
+	lineStarts []int // offsets in src where each line begins, built on first use
 }
 
 func newScanner(src []byte) (*scanner, error) {
-	src = stripBOM(src)
-	var err error
-	src, err = normalizeCRLF(src)
+	stripped := stripBOM(src)
+	bomLen := len(src) - len(stripped)
+	src, crlf, err := normalizeCRLF(stripped)
 	if err != nil {
 		return nil, err
 	}
@@ -37,6 +42,8 @@ func newScanner(src []byte) (*scanner, error) {
 		line:        1,
 		col:         1,
 		atLineStart: true,
+		bomLen:      bomLen,
+		crlf:        crlf,
 	}, nil
 }
 
@@ -47,18 +54,22 @@ func stripBOM(src []byte) []byte {
 	return src
 }
 
-func normalizeCRLF(src []byte) ([]byte, error) {
+// normalizeCRLF replaces each \r\n with \n. It also returns the offset in the
+// result of every \n that lost its \r, so positions can be mapped back to the input.
+func normalizeCRLF(src []byte) ([]byte, []int, error) {
 	if !bytes.ContainsRune(src, '\r') {
-		return src, nil
+		return src, nil, nil
 	}
 	buf := make([]byte, 0, len(src))
+	var crlf []int
 	line := 1
 	for i := range src {
 		if src[i] == '\r' {
 			if i+1 < len(src) && src[i+1] == '\n' {
+				crlf = append(crlf, len(buf))
 				continue
 			}
-			return nil, &SyntaxError{
+			return nil, nil, &SyntaxError{
 				Message: "bare carriage return not allowed",
 				Pos:     Position{Line: line, Column: i + 1},
 			}
@@ -68,7 +79,7 @@ func normalizeCRLF(src []byte) ([]byte, error) {
 		}
 		buf = append(buf, src[i])
 	}
-	return buf, nil
+	return buf, crlf, nil
 }
 
 // Valid reports whether data is valid TOML.
@@ -102,6 +113,7 @@ func (s *scanner) scanNext() error {
 	if s.atEnd() {
 		return nil
 	}
+	s.tokStart = s.pos
 
 	ch := s.peek()
 
@@ -179,6 +191,7 @@ func (s *scanner) scanTableHeader() error {
 			return err
 		}
 		s.skipWhitespace()
+		s.tokStart = s.pos
 		if s.atEnd() || s.peek() != ']' {
 			return s.syntaxError("expected ]]")
 		}
@@ -195,6 +208,7 @@ func (s *scanner) scanTableHeader() error {
 			return err
 		}
 		s.skipWhitespace()
+		s.tokStart = s.pos
 		if s.atEnd() || s.peek() != ']' {
 			return s.syntaxError("expected ]")
 		}
@@ -211,6 +225,7 @@ func (s *scanner) scanTableKey() error {
 		if s.atEnd() {
 			return s.syntaxError("expected key")
 		}
+		s.tokStart = s.pos
 		ch := s.peek()
 		switch ch {
 		case '"':
@@ -231,6 +246,7 @@ func (s *scanner) scanTableKey() error {
 			return nil
 		}
 		if s.peek() == '.' {
+			s.tokStart = s.pos
 			s.emit(tokenDot, "")
 			s.advance()
 			s.skipWhitespace()
@@ -944,7 +960,7 @@ func (s *scanner) position() Position {
 }
 
 func (s *scanner) emit(kind tokenKind, value string) {
-	s.tokens = append(s.tokens, token{kind: kind, value: value, pos: s.position()})
+	s.tokens = append(s.tokens, token{kind: kind, value: value, pos: s.position(), start: int32(s.tokStart)})
 }
 
 func (s *scanner) atEnd() bool {
