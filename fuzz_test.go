@@ -93,3 +93,19 @@ func FuzzValid(f *testing.F) {
 		_ = Valid(data)
 	})
 }
+
+// FuzzSpans parses random documents and checks that every node's source span
+// is in bounds and its text parses back to the same key or value.
+func FuzzSpans(f *testing.F) {
+	f.Add([]byte(spanDoc))
+	f.Add([]byte("a.\"b c\".d = [1, {x = 'y'}]\r\n[[t]]\r\ns = \"\"\"\r\nx\"\"\"\r\n"))
+	f.Add([]byte("\uFEFFk = 1 # c\n"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		file, err := Parse(data)
+		if err != nil {
+			return
+		}
+		checkSpans(t, data, file.Root)
+	})
+}

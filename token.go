@@ -1,6 +1,6 @@
 package toml
 
-type tokenKind int
+type tokenKind int32
 
 const (
 	tokenError tokenKind = iota
@@ -36,8 +36,9 @@ const (
 
 type token struct {
 	kind  tokenKind
+	start int32 // offset in the normalized source where the token begins
 	value string
-	pos   Position
+	pos   Position // where the token ends; where it begins for a newline and for = . , { } and a value's [ ]
 }
 
 func (t token) String() string {

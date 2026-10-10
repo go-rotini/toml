@@ -14,6 +14,7 @@ This package is used as the default TOML support package for [rotini](https://gi
 - Encode options: indent, indent tables, inline tables, multiline arrays, literal strings, table separators, comments
 - Decode options: strict mode, ordered maps, struct validation, local time zone, JSON unmarshaler fallback
 - AST access via `Parse`, `Walk`, `Filter`, and `Node` tree manipulation
+- Source spans on every parsed node (`Node.Span`, `Node.KeySpan`) for editing a file in place, comments and layout untouched
 - JSONPath-like query engine (`PathString`) with read, replace, append, and delete operations
 - Bidirectional JSON conversion (`ToJSON`/`FromJSON`)
 - `Valid` function for quick syntax validation without full decoding

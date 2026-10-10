@@ -43,6 +43,8 @@ type node struct {
 	comment     string
 	headComment string
 	footComment string
+	span        srcSpan
+	keySpan     srcSpan
 }
 
 // NodeKind identifies the type of a TOML [Node] in the AST.
@@ -87,6 +89,8 @@ type Node struct {
 	Comment     string // line comment (after value on same line)
 	HeadComment string // comment block before this node
 	FootComment string // comment block after this node
+	Span        Span   // the node's source text; see [Span]
+	KeySpan     Span   // for KeyValueNode/TableNode/ArrayTableNode: the key as written, every dotted segment included
 }
 
 // String returns the dotted key path for table/key-value nodes, or the
@@ -155,7 +159,7 @@ func Parse(data []byte) (*File, error) {
 	}
 
 	file := &File{
-		Root:     exportNode(root),
+		Root:     exportNode(root, s.spanOf),
 		Warnings: p.warnings,
 	}
 	return file, nil
@@ -212,7 +216,7 @@ func NodeToBytesWithOptions(n *Node, opts ...EncodeOption) ([]byte, error) {
 	return enc.encodeNode(internal)
 }
 
-func exportNode(n *node) *Node {
+func exportNode(n *node, spanOf func(srcSpan) Span) *Node {
 	if n == nil {
 		return nil
 	}
@@ -226,9 +230,11 @@ func exportNode(n *node) *Node {
 		Comment:     n.comment,
 		HeadComment: n.headComment,
 		FootComment: n.footComment,
+		Span:        spanOf(n.span),
+		KeySpan:     spanOf(n.keySpan),
 	}
 	for _, child := range n.children {
-		pub.Children = append(pub.Children, exportNode(child))
+		pub.Children = append(pub.Children, exportNode(child, spanOf))
 	}
 	return pub
 }

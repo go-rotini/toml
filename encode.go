@@ -289,7 +289,7 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 	}
 
 	if rv.Kind() == reflect.Struct && isScalarStruct(rv.Type()) {
-		if m, ok := rv.Interface().(encoding.TextMarshaler); ok {
+		if m, ok := reflect.TypeAssert[encoding.TextMarshaler](rv); ok {
 			text, err := m.MarshalText()
 			if err != nil {
 				return err
@@ -371,7 +371,7 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		if fn, ok := e.opts.customMarshalers[rv.Type()]; ok {
 			result := reflect.ValueOf(fn).Call([]reflect.Value{rv})
 			if !result[1].IsNil() {
-				if err, ok := result[1].Interface().(error); ok {
+				if err, ok := reflect.TypeAssert[error](result[1]); ok {
 					return err
 				}
 			}
@@ -795,16 +795,16 @@ func isTableValue(rv reflect.Value) bool {
 			rv.Type() == reflect.TypeFor[big.Float]() {
 			return false
 		}
-		if _, ok := rv.Interface().(encoding.TextMarshaler); ok {
+		if _, ok := reflect.TypeAssert[encoding.TextMarshaler](rv); ok {
 			return false
 		}
-		if _, ok := rv.Interface().(Marshaler); ok {
+		if _, ok := reflect.TypeAssert[Marshaler](rv); ok {
 			return false
 		}
-		if _, ok := rv.Interface().(MarshalerContext); ok {
+		if _, ok := reflect.TypeAssert[MarshalerContext](rv); ok {
 			return false
 		}
-		if _, ok := rv.Interface().(BytesMarshaler); ok {
+		if _, ok := reflect.TypeAssert[BytesMarshaler](rv); ok {
 			return false
 		}
 		return true
