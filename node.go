@@ -80,21 +80,21 @@ const (
 // Node is a TOML AST node.
 type Node struct {
 	Kind        NodeKind
-	Key         []string    // key path segments for KeyValueNode/TableNode/ArrayTableNode
-	Value       string      // raw string representation of the value (for scalar nodes)
+	Key         []string    // for KeyValueNode/TableNode/ArrayTableNode: the node's own key; dotted keys and headers nest as tables
+	Value       string      // for scalars: a string's decoded contents, otherwise the literal as written
 	Style       StringStyle // for StringNode: which string style was used
 	Inline      bool        // for tables: inline table format ({...})
 	Children    []*Node     // child nodes
 	Pos         Position
-	Comment     string // line comment (after value on same line)
-	HeadComment string // comment block before this node
+	Comment     string // line comment after the value or header: the text following #
+	HeadComment string // comment lines before this node, joined by newlines
 	FootComment string // comment block after this node
 	Span        Span   // the node's source text; see [Span]
 	KeySpan     Span   // for KeyValueNode/TableNode/ArrayTableNode: the key as written, every dotted segment included
 }
 
-// String returns the dotted key path for table/key-value nodes, or the
-// value for scalar nodes.
+// String returns the key for table and key/value nodes, a short summary
+// for arrays and inline tables, and [Node.Value] for scalars.
 func (n *Node) String() string {
 	switch n.Kind {
 	case TableNode, ArrayTableNode, KeyValueNode:
@@ -108,9 +108,9 @@ func (n *Node) String() string {
 	}
 }
 
-// Validate checks structural invariants of the node tree: key uniqueness,
-// table/array-of-table conflicts, inline table immutability. Returns nil
-// if the tree is valid.
+// Validate reports the first key/value pair whose key repeats within the
+// same table or inline table as a [DuplicateKeyError], or nil if there is
+// none.
 func (n *Node) Validate() error {
 	var err error
 	Walk(n, func(node *Node) bool {
@@ -141,7 +141,7 @@ type File struct {
 	Warnings []string
 }
 
-// Parse tokenizes and parses data into an AST.
+// Parse parses data into a [File] whose Root is the document's root table.
 func Parse(data []byte) (*File, error) {
 	s, err := newScanner(data)
 	if err != nil {
@@ -196,8 +196,9 @@ func Filter(n *Node, fn func(*Node) bool) []*Node {
 	return result
 }
 
-// NodeToBytes serializes a [Node] tree back into TOML bytes using default
-// encoding options.
+// NodeToBytes serializes a [Node] tree into TOML using default encoding
+// options. The output is regenerated rather than a copy of the source layout;
+// to edit a parsed document in place, use [Node.Span].
 func NodeToBytes(n *Node) ([]byte, error) {
 	internal := importNode(n)
 	enc := newEncoder(defaultEncodeOptions())

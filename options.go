@@ -45,8 +45,9 @@ func defaultEncodeOptions() *encoderOptions {
 	}
 }
 
-// WithIndent sets the number of spaces per indentation level (default 0).
-// TOML convention uses no indentation, but some users prefer indented sub-tables.
+// WithIndent indents the key/value pairs inside a table by n spaces per
+// nesting level (default 0, no indentation). [WithIndentTables] applies the
+// same width to nested table headers.
 func WithIndent(n int) EncodeOption {
 	return func(o *encoderOptions) { o.indent = n }
 }
@@ -73,9 +74,8 @@ func WithMultiLineString(b bool) EncodeOption {
 	return func(o *encoderOptions) { o.multiLineString = b }
 }
 
-// WithBasicStrings forces all string values to use basic (double-quoted)
-// strings instead of the encoder's default choice. This overrides the
-// per-field literal tag.
+// WithBasicStrings overrides [WithLiteralString] so strings are written as
+// basic (double-quoted) strings. A field's literal tag still applies.
 func WithBasicStrings(b bool) EncodeOption {
 	return func(o *encoderOptions) { o.basicStrings = b }
 }
@@ -92,8 +92,9 @@ func WithComment(comments map[string][]Comment) EncodeOption {
 	return func(o *encoderOptions) { o.comments = comments }
 }
 
-// WithIndentTables indents key/value pairs within sub-tables relative to
-// their table header.
+// WithIndentTables indents nested table headers, and the comments above them,
+// by their depth using the [WithIndent] width. It has no effect when that
+// width is 0.
 func WithIndentTables(b bool) EncodeOption {
 	return func(o *encoderOptions) { o.indentTables = b }
 }
@@ -119,8 +120,9 @@ func WithCustomMarshaler[T any](fn func(T) ([]byte, error)) EncodeOption {
 // and [Decoder].
 type DecodeOption func(*decoderOptions)
 
-// StructValidator validates a struct after all fields have been decoded.
-// Implement this interface to integrate with validation libraries.
+// StructValidator validates a struct after all of its fields have been
+// decoded. Struct receives a pointer to the struct. Register one with
+// [WithValidator].
 type StructValidator interface {
 	Struct(v any) error
 }
@@ -150,7 +152,9 @@ func defaultDecodeOptions() *decoderOptions {
 // key is absent from the input. Default values are specified with the
 // "default=<value>" tag option (e.g. `toml:"port,default=8080"`).
 // Only scalar types are supported: string, bool, int/uint variants, float
-// variants, and time.Duration. Without this option, default tags are ignored.
+// variants, and time.Duration. A default that does not parse, or one on any
+// other type, returns a [DefaultError]. Without this option, default tags are
+// ignored.
 func WithDefaults() DecodeOption {
 	return func(o *decoderOptions) { o.applyDefaults = true }
 }
@@ -173,31 +177,33 @@ func WithJSONUnmarshaler() DecodeOption {
 	return func(o *decoderOptions) { o.useJSONUnmarshaler = true }
 }
 
-// WithMaxDepth limits the nesting depth of the decoded value (default 100).
-// Deeply nested documents are rejected with a [SyntaxError].
+// WithMaxDepth limits how deeply tables may nest in the decoded value
+// (default 100; zero means no limit). Deeper tables are rejected with a
+// [SyntaxError].
 func WithMaxDepth(n int) DecodeOption {
 	return func(o *decoderOptions) { o.maxDepth = n }
 }
 
-// WithMaxKeys limits the total number of keys the parser may encounter.
-// Zero means no limit.
+// WithMaxKeys limits the total number of key/value pairs decoded into structs
+// and maps; exceeding it returns a [SyntaxError]. Zero means no limit.
 func WithMaxKeys(n int) DecodeOption {
 	return func(o *decoderOptions) { o.maxKeys = n }
 }
 
-// WithMaxDocumentSize rejects input that exceeds n bytes before parsing begins.
+// WithMaxDocumentSize rejects input longer than n bytes with
+// [ErrDocumentSize] before parsing begins. Zero means no limit.
 func WithMaxDocumentSize(n int) DecodeOption {
 	return func(o *decoderOptions) { o.maxDocumentSize = n }
 }
 
-// WithMaxNodes limits the total number of AST nodes the parser may create.
-// Zero means no limit.
+// WithMaxNodes limits the total number of AST nodes the parser may create;
+// exceeding it returns a [SyntaxError]. Zero means no limit.
 func WithMaxNodes(n int) DecodeOption {
 	return func(o *decoderOptions) { o.maxNodes = n }
 }
 
 // WithValidator registers a [StructValidator] that is called after each struct
-// is fully decoded.
+// is fully decoded. An error it returns is wrapped in a [ValidationError].
 func WithValidator(v StructValidator) DecodeOption {
 	return func(o *decoderOptions) { o.validator = v }
 }
@@ -213,8 +219,8 @@ func WithCustomUnmarshaler[T any](fn func(*T, []byte) error) DecodeOption {
 	}
 }
 
-// WithLocalTimeZone sets the [time.Location] used when decoding local date-time
-// values into [time.Time]. Default is [time.Local].
+// WithLocalTimeZone sets the [time.Location] used when decoding local date
+// and local date-time values into [time.Time]. Default is [time.Local].
 func WithLocalTimeZone(loc *time.Location) DecodeOption {
 	return func(o *decoderOptions) { o.localTimeZone = loc }
 }

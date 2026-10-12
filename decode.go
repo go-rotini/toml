@@ -13,8 +13,10 @@ import (
 )
 
 // Unmarshaler is implemented by types that control their own TOML
-// decoding. The unmarshal function decodes the TOML value into the
-// provided Go value, similar to [Unmarshal].
+// decoding. The unmarshal function stores the TOML value, in the form
+// decoding into an any produces (string, int64, float64, bool, a date or
+// time type, []any, or map[string]any), into the pointer it is given. That
+// value must be assignable to the pointer's element type, as it is to an any.
 type Unmarshaler interface {
 	UnmarshalTOML(unmarshal func(any) error) error
 }

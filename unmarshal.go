@@ -7,8 +7,10 @@ import (
 	"os"
 )
 
-// Unmarshal decodes TOML data into v. The top-level value in v must be a
-// pointer to a struct or map.
+// Unmarshal decodes TOML data into v, which must be a non-nil pointer
+// (otherwise Unmarshal returns [ErrNilPointer]) to a struct, a map with string
+// or [encoding.TextUnmarshaler] keys, or an interface value, which receives a
+// map[string]any ([MapSlice] with [WithOrderedMap]).
 func Unmarshal(data []byte, v any) error {
 	return UnmarshalWithOptions(data, v)
 }
@@ -84,7 +86,8 @@ func (dec *Decoder) Decode(v any) error {
 	return dec.DecodeContext(dec.ctx, v)
 }
 
-// DecodeContext reads the TOML input and decodes it into v with context.
+// DecodeContext reads the TOML input and decodes it into v, passing ctx to
+// [UnmarshalerContext] implementations.
 func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 	if dec.done {
 		return io.EOF

@@ -20,10 +20,12 @@
 //	}
 //
 // The tag format is "keyname,opts" where opts is a comma-separated list of:
-//   - omitempty: omit the field if it has its zero value
-//   - omitzero: omit the field if it has its zero value (explicit alias)
-//   - inline: encode the struct or map as an inline table
-//   - multiline: encode strings as multi-line basic strings
+//   - omitempty: omit the field if it is a zero value or an empty slice or map
+//   - omitzero: same as omitempty
+//   - inline: on a struct field, merge its fields into the parent table as
+//     an embedded struct's are; on a map field, encode it as an inline table
+//   - multiline: encode strings as multi-line basic strings (multi-line
+//     literal strings when combined with literal)
 //   - literal: encode strings as literal (single-quoted) strings
 //   - commented: encode the field as a commented-out line
 //   - hex: encode integers in hexadecimal (0x) format
@@ -33,7 +35,11 @@
 //   - default=<value>: set field to <value> during decoding if the key is absent
 //     (requires [WithDefaults]; scalar types only)
 //
-// A tag of "-" excludes the field from encoding and decoding.
+// A tag of "-" excludes the field from encoding and decoding. A field with
+// no "toml" tag uses its "json" tag, and a field with neither is keyed by its
+// lower-cased name. Decoding falls back to a case-insensitive match when no
+// field name matches a key exactly. A "comment" tag writes its text as a
+// comment line above the field when encoding.
 //
 // # Custom Marshalers
 //

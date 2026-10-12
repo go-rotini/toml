@@ -19,14 +19,16 @@ func (p Position) String() string {
 	return fmt.Sprintf("%d:%d", p.Line, p.Column)
 }
 
-// SyntaxError is returned when the TOML input is malformed.
-// Use [errors.Is](err, [ErrSyntax]) to test for syntax errors generically.
+// SyntaxError is returned when the TOML input is malformed, when a key
+// tagged required is missing, and when a decode limit such as [WithMaxDepth]
+// is exceeded. Use [errors.Is](err, [ErrSyntax]) to test for it.
 type SyntaxError struct {
 	Message string
 	Pos     Position
 	Token   string
 }
 
+// Error implements the error interface.
 func (e *SyntaxError) Error() string {
 	if e.Pos.Line > 0 {
 		return fmt.Sprintf("toml: line %d, column %d: %s", e.Pos.Line, e.Pos.Column, e.Message)
@@ -34,6 +36,8 @@ func (e *SyntaxError) Error() string {
 	return fmt.Sprintf("toml: %s", e.Message)
 }
 
+// Is reports whether target is a *SyntaxError, so [errors.Is] matches any
+// SyntaxError against its sentinel.
 func (e *SyntaxError) Is(target error) bool {
 	_, ok := target.(*SyntaxError)
 	return ok
@@ -45,10 +49,13 @@ type TypeError struct {
 	Errors []string
 }
 
+// Error implements the error interface.
 func (e *TypeError) Error() string {
 	return fmt.Sprintf("toml: unmarshal errors:\n  %s", strings.Join(e.Errors, "\n  "))
 }
 
+// Is reports whether target is a *TypeError, so [errors.Is] matches any
+// TypeError against its sentinel.
 func (e *TypeError) Is(target error) bool {
 	_, ok := target.(*TypeError)
 	return ok
@@ -61,10 +68,13 @@ type UnknownFieldError struct {
 	Pos   Position
 }
 
+// Error implements the error interface.
 func (e *UnknownFieldError) Error() string {
 	return fmt.Sprintf("toml: line %d: unknown field %q", e.Pos.Line, e.Field)
 }
 
+// Is reports whether target is an *UnknownFieldError, so [errors.Is] matches any
+// UnknownFieldError against its sentinel.
 func (e *UnknownFieldError) Is(target error) bool {
 	_, ok := target.(*UnknownFieldError)
 	return ok
@@ -77,10 +87,13 @@ type DuplicateKeyError struct {
 	Pos Position
 }
 
+// Error implements the error interface.
 func (e *DuplicateKeyError) Error() string {
 	return fmt.Sprintf("toml: line %d: duplicate key %q", e.Pos.Line, e.Key)
 }
 
+// Is reports whether target is a *DuplicateKeyError, so [errors.Is] matches any
+// DuplicateKeyError against its sentinel.
 func (e *DuplicateKeyError) Is(target error) bool {
 	_, ok := target.(*DuplicateKeyError)
 	return ok
@@ -93,14 +106,18 @@ type ValidationError struct {
 	Pos Position
 }
 
+// Error implements the error interface.
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("toml: line %d: validation: %s", e.Pos.Line, e.Err.Error())
 }
 
+// Unwrap returns the validator's error.
 func (e *ValidationError) Unwrap() error {
 	return e.Err
 }
 
+// Is reports whether target is a *ValidationError, so [errors.Is] matches any
+// ValidationError against its sentinel.
 func (e *ValidationError) Is(target error) bool {
 	_, ok := target.(*ValidationError)
 	return ok
@@ -114,10 +131,13 @@ type DefaultError struct {
 	Pos     Position
 }
 
+// Error implements the error interface.
 func (e *DefaultError) Error() string {
 	return fmt.Sprintf("toml: field %q: %s", e.Field, e.Message)
 }
 
+// Is reports whether target is a *DefaultError, so [errors.Is] matches any
+// DefaultError against its sentinel.
 func (e *DefaultError) Is(target error) bool {
 	_, ok := target.(*DefaultError)
 	return ok
@@ -130,10 +150,13 @@ type OverflowError struct {
 	Pos   Position
 }
 
+// Error implements the error interface.
 func (e *OverflowError) Error() string {
 	return fmt.Sprintf("toml: line %d: value %s overflows %s", e.Pos.Line, e.Value, e.Type)
 }
 
+// Is reports whether target is an *OverflowError, so [errors.Is] matches any
+// OverflowError against its sentinel.
 func (e *OverflowError) Is(target error) bool {
 	_, ok := target.(*OverflowError)
 	return ok
@@ -146,10 +169,13 @@ type InlineTableError struct {
 	Pos   Position
 }
 
+// Error implements the error interface.
 func (e *InlineTableError) Error() string {
 	return fmt.Sprintf("toml: line %d: cannot extend inline table %q", e.Pos.Line, e.Table)
 }
 
+// Is reports whether target is an *InlineTableError, so [errors.Is] matches any
+// InlineTableError against its sentinel.
 func (e *InlineTableError) Is(target error) bool {
 	_, ok := target.(*InlineTableError)
 	return ok
@@ -163,10 +189,13 @@ type ConflictError struct {
 	Pos     Position
 }
 
+// Error implements the error interface.
 func (e *ConflictError) Error() string {
 	return fmt.Sprintf("toml: line %d: key %q: %s", e.Pos.Line, e.Key, e.Message)
 }
 
+// Is reports whether target is a *ConflictError, so [errors.Is] matches any
+// ConflictError against its sentinel.
 func (e *ConflictError) Is(target error) bool {
 	_, ok := target.(*ConflictError)
 	return ok
@@ -225,8 +254,9 @@ var (
 )
 
 // FormatError returns a human-readable string for errors that carry a
-// [Position] (such as [SyntaxError], [DuplicateKeyError], [OverflowError],
-// [InlineTableError], [ConflictError], or [ValidationError]). The output
+// [Position] ([SyntaxError], [DuplicateKeyError], [OverflowError],
+// [InlineTableError], [ConflictError], [UnknownFieldError] or
+// [ValidationError], wrapped or not). The output
 // includes the offending source line and a column pointer. For other error
 // types it returns err.Error(). Set color to true to include ANSI color
 // escape sequences.

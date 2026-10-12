@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-// Path represents a compiled path expression for querying TOML AST nodes.
+// Path is a compiled query over a [Node] tree, built by [PathString] or
+// [PathPointer].
 type Path struct {
 	segments []pathSegment
 	raw      string
@@ -68,13 +69,15 @@ func (s recursiveSegment) match(n *Node) []*Node {
 
 // PathString compiles a path expression string into a [Path].
 //
-// Syntax:
-//   - $.key — root child access
+// Each segment selects from the children of the nodes matched so far:
+//   - $.key — children whose key is key
 //   - $.parent.child — nested key access
-//   - $.array[0] — array index access
-//   - $.array[-1] — negative index (from end)
-//   - $.table.* — wildcard (all children)
-//   - $..key — recursive descent
+//   - [n] — the child at index n; a negative n counts from the end
+//   - .* — all children
+//   - $..key — nodes at any depth whose key is key
+//
+// A key matches a [KeyValueNode], whose only child is its value, so element
+// i of an array value is $.key[0][i].
 func PathString(expr string) (*Path, error) {
 	if expr == "" || expr[0] != '$' {
 		return nil, fmt.Errorf("%w: path must start with $", ErrPathSyntax)
@@ -207,7 +210,8 @@ func pointerValue(n *Node) *Node {
 	return n
 }
 
-// Read returns all nodes matching the path expression.
+// Read returns all nodes under n matching the path, or [ErrPathNotFound]
+// when none do.
 func (p *Path) Read(n *Node) ([]*Node, error) {
 	if n == nil {
 		return nil, ErrPathNotFound
@@ -228,7 +232,8 @@ func (p *Path) Read(n *Node) ([]*Node, error) {
 	return current, nil
 }
 
-// ReadString reads a single scalar node matching the path and returns its value.
+// ReadString returns the [Node.Value] of the first matching node, or of its
+// value node when that match is a key/value pair.
 func (p *Path) ReadString(n *Node) (string, error) {
 	nodes, err := p.Read(n)
 	if err != nil {
@@ -244,7 +249,7 @@ func (p *Path) ReadString(n *Node) (string, error) {
 	return node.Value, nil
 }
 
-// ReadPositions returns the positions of all matching nodes.
+// ReadPositions returns the [Node.Pos] of every matching node.
 func (p *Path) ReadPositions(n *Node) ([]Position, error) {
 	nodes, err := p.Read(n)
 	if err != nil {
