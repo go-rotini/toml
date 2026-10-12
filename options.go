@@ -52,7 +52,8 @@ func WithIndent(n int) EncodeOption {
 	return func(o *encoderOptions) { o.indent = n }
 }
 
-// WithInlineTable encodes all nested tables as inline tables ({...}).
+// WithInlineTable encodes all nested tables as inline tables ({...}) instead
+// of [table] sections, and arrays of tables as arrays of inline tables.
 func WithInlineTable(b bool) EncodeOption {
 	return func(o *encoderOptions) { o.inlineTable = b }
 }
@@ -88,6 +89,11 @@ func WithOmitEmpty(b bool) EncodeOption {
 
 // WithComment attaches comments to nodes by dot-path key (e.g. "server.port").
 // Each key maps to a slice of [Comment] values specifying position and text.
+// A key may name a key/value pair or a table. Head comments go on the lines
+// above the pair or table header, a line comment after the value or header,
+// and foot comments on the lines after the pair or after the table's
+// contents. For an array of tables, head and line comments go on the first
+// [[header]] and foot comments after the last entry.
 func WithComment(comments map[string][]Comment) EncodeOption {
 	return func(o *encoderOptions) { o.comments = comments }
 }
@@ -171,8 +177,12 @@ func WithOrderedMap() DecodeOption {
 	return func(o *decoderOptions) { o.useOrderedMap = true }
 }
 
-// WithJSONUnmarshaler causes the decoder to try a type's UnmarshalJSON method
-// if no TOML-specific unmarshaler is found.
+// WithJSONUnmarshaler causes the decoder to use a type's UnmarshalJSON method,
+// passing it the TOML value encoded as JSON (a table as an object), when the
+// type has no TOML-specific unmarshaler: an [Unmarshaler],
+// [UnmarshalerContext], [BytesUnmarshaler], [encoding.TextUnmarshaler] for a
+// scalar, or [WithCustomUnmarshaler] function. [time.Time], [math/big.Int],
+// [math/big.Float] and the local date and time types keep their TOML decoding.
 func WithJSONUnmarshaler() DecodeOption {
 	return func(o *decoderOptions) { o.useJSONUnmarshaler = true }
 }
@@ -209,7 +219,8 @@ func WithValidator(v StructValidator) DecodeOption {
 }
 
 // WithCustomUnmarshaler registers a function that decodes TOML bytes into a
-// value of type T, overriding the default decoding for that type.
+// value of type T, overriding the default decoding for that type. It receives
+// the same bytes as a [BytesUnmarshaler].
 func WithCustomUnmarshaler[T any](fn func(*T, []byte) error) DecodeOption {
 	return func(o *decoderOptions) {
 		if o.customUnmarshalers == nil {

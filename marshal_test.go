@@ -77,9 +77,7 @@ func TestMarshalWithOptionsOmitEmpty(t *testing.T) {
 }
 
 func TestMarshalWithOptionsInlineTable(t *testing.T) {
-	// WithInlineTable affects encodeValue for structs/maps, but struct fields
-	// that are structs go through encodeTableField (which writes [table]).
-	// The option applies when encoding maps as values.
+	// WithInlineTable writes nested struct fields as inline tables.
 	type Inner struct {
 		A int `toml:"a"`
 	}
@@ -90,10 +88,8 @@ func TestMarshalWithOptionsInlineTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(out)
-	// Struct fields are still written as tables with headers
-	if !strings.Contains(s, "[inner]") || !strings.Contains(s, "a = 1") {
-		t.Errorf("expected table with header, got:\n%s", s)
+	if s := string(out); s != "inner = { a = 1 }\n" {
+		t.Errorf("got:\n%s", s)
 	}
 }
 

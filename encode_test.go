@@ -602,11 +602,7 @@ func TestEncodeInlineTableTag(t *testing.T) {
 }
 
 func TestEncodeInlineTableOption(t *testing.T) {
-	// WithInlineTable affects how structs/maps are encoded when they reach
-	// encodeValue (e.g., within arrays or inline maps). For top-level struct
-	// fields that are structs, the partitioning still routes them through
-	// encodeTableField which writes [table] headers. Test the actual behavior:
-	// sub-struct fields get a table header.
+	// WithInlineTable writes nested struct fields as inline tables.
 	type Inner struct {
 		A string `toml:"a"`
 	}
@@ -617,12 +613,8 @@ func TestEncodeInlineTableOption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(out)
-	if !strings.Contains(s, "[sub]") {
-		t.Errorf("expected table header for sub-struct, got:\n%s", s)
-	}
-	if !strings.Contains(s, `a = "val"`) {
-		t.Errorf("expected a value, got:\n%s", s)
+	if s := string(out); s != "sub = { a = \"val\" }\n" {
+		t.Errorf("got:\n%s", s)
 	}
 }
 
@@ -3644,3 +3636,75 @@ func TestEncodeFieldNonCommentedError(t *testing.T) {
 
 var _ = fmt.Sprint
 var _ = errors.New
+
+func TestEncodeInlineTableOptionNestsAllTables(t *testing.T) {
+	type Item struct {
+		N int `toml:"n"`
+	}
+	type Inner struct {
+		A string `toml:"a"`
+	}
+	type S struct {
+		Title string         `toml:"title"`
+		Sub   Inner          `toml:"sub"`
+		Items []Item         `toml:"items"`
+		M     map[string]int `toml:"m"`
+	}
+	in := S{Title: "t", Sub: Inner{A: "val"}, Items: []Item{{N: 1}, {N: 2}}, M: map[string]int{"k": 1}}
+	out, err := MarshalWithOptions(in, WithInlineTable(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "title = \"t\"\nsub = { a = \"val\" }\nitems = [{ n = 1 }, { n = 2 }]\nm = { k = 1 }\n"
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	var back S
+	if err := Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back, in) {
+		t.Errorf("round trip = %+v, want %+v", back, in)
+	}
+
+	mout, err := MarshalWithOptions(map[string]any{"server": map[string]any{"port": 1}}, WithInlineTable(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(mout) != "server = { port = 1 }\n" {
+		t.Errorf("map got:\n%s", mout)
+	}
+}
+
+func TestEncodeWithCommentPositions(t *testing.T) {
+	type Server struct {
+		Port int `toml:"port"`
+	}
+	type Cfg struct {
+		Name   string `toml:"name"`
+		Server Server `toml:"server"`
+	}
+	out, err := MarshalWithOptions(Cfg{Name: "x", Server: Server{Port: 1}}, WithComment(map[string][]Comment{
+		"name": {
+			{Position: HeadCommentPos, Text: "head"},
+			{Position: LineCommentPos, Text: "line"},
+			{Position: FootCommentPos, Text: "foot"},
+		},
+		"server": {
+			{Position: HeadCommentPos, Text: "server head"},
+			{Position: LineCommentPos, Text: "server line"},
+			{Position: FootCommentPos, Text: "server foot"},
+		},
+		"server.port": {{Position: LineCommentPos, Text: "port line"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# head\nname = \"x\" # line\n# foot\n\n# server head\n[server] # server line\nport = 1 # port line\n# server foot\n"
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	if _, err := Parse(out); err != nil {
+		t.Errorf("output does not parse: %v", err)
+	}
+}

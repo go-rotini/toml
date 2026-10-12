@@ -103,7 +103,7 @@ func (e *encoder) encodeStruct(rv reflect.Value, path []string) error {
 		if e.opts.omitEmpty && isEmpty(fv) {
 			continue
 		}
-		if isTableValue(fv) && !fi.inline {
+		if isTableValue(fv) && !fi.inline && !e.opts.inlineTable {
 			tables = append(tables, fieldEntry{fi, fv})
 		} else {
 			simples = append(simples, fieldEntry{fi, fv})
@@ -147,7 +147,7 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 		for val.Kind() == reflect.Interface {
 			val = val.Elem()
 		}
-		if val.IsValid() && isTableValue(val) {
+		if val.IsValid() && isTableValue(val) && !e.opts.inlineTable {
 			tables = append(tables, mapEntry{key, val})
 		} else {
 			simples = append(simples, mapEntry{key, val})
@@ -155,15 +155,12 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 	}
 
 	for _, entry := range simples {
-		indent := e.indentPrefix(len(path))
-		e.writeComment(entry.key, path)
-		e.buf.WriteString(indent)
-		e.writeKey(entry.key)
-		e.buf.WriteString(" = ")
-		if err := e.encodeValue(entry.value, fieldInfo{}); err != nil {
+		err := e.writeKeyValue(path, entry.key, "", func() error {
+			return e.encodeValue(entry.value, fieldInfo{})
+		})
+		if err != nil {
 			return err
 		}
-		e.buf.WriteByte('\n')
 	}
 
 	for _, entry := range tables {
@@ -178,11 +175,8 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 				elem = elem.Elem()
 			}
 			if elem.Kind() == reflect.Struct || elem.Kind() == reflect.Map {
-				for i := range val.Len() {
-					e.writeArrayTableHeader(subPath)
-					if err := e.encodeTable(val.Index(i), subPath); err != nil {
-						return err
-					}
+				if err := e.encodeArrayTables(val, subPath); err != nil {
+					return err
 				}
 				continue
 			}
@@ -191,48 +185,59 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 		if err := e.encodeTable(val, subPath); err != nil {
 			return err
 		}
+		e.writeCommentBlock(e.headerIndent(subPath), e.optionComment(subPath, FootCommentPos))
 	}
 
 	return nil
 }
 
-func (e *encoder) encodeField(fi fieldInfo, fv reflect.Value, path []string) error {
-	indent := e.indentPrefix(len(path))
-
-	if fi.commented {
-		if fi.comment != "" {
-			e.buf.WriteString(indent)
-			e.buf.WriteString("# ")
-			e.buf.WriteString(fi.comment)
-			e.buf.WriteByte('\n')
-		}
-		e.writeComment(fi.name, path)
-		e.buf.WriteString(indent)
-		e.buf.WriteString("# ")
-		e.writeKey(fi.name)
-		e.buf.WriteString(" = ")
-		if err := e.encodeValue(fv, fi); err != nil {
+// encodeArrayTables writes each element of rv as a [[table]] entry. The
+// [WithComment] head and line comments go on the first header and the foot
+// comment after the last entry.
+func (e *encoder) encodeArrayTables(rv reflect.Value, path []string) error {
+	for i := range rv.Len() {
+		e.writeArrayTableHeader(path, i == 0)
+		if err := e.encodeTable(rv.Index(i), path); err != nil {
 			return err
 		}
-		e.buf.WriteByte('\n')
-		return nil
 	}
+	e.writeCommentBlock(e.headerIndent(path), e.optionComment(path, FootCommentPos))
+	return nil
+}
 
+func (e *encoder) encodeField(fi fieldInfo, fv reflect.Value, path []string) error {
 	if fi.comment != "" {
-		e.buf.WriteString(indent)
+		e.buf.WriteString(e.indentPrefix(len(path)))
 		e.buf.WriteString("# ")
 		e.buf.WriteString(fi.comment)
 		e.buf.WriteByte('\n')
 	}
+	prefix := ""
+	if fi.commented {
+		prefix = "# "
+	}
+	return e.writeKeyValue(path, fi.name, prefix, func() error {
+		return e.encodeValue(fv, fi)
+	})
+}
 
-	e.writeComment(fi.name, path)
+// writeKeyValue writes one key/value line under path, with the key's
+// [WithComment] comments. prefix is written before the key ("# " for a
+// commented field), and value writes the value.
+func (e *encoder) writeKeyValue(path []string, key, prefix string, value func() error) error {
+	keyPath := append(append([]string{}, path...), key)
+	indent := e.indentPrefix(len(path))
+	e.writeCommentBlock(indent, e.optionComment(keyPath, HeadCommentPos))
 	e.buf.WriteString(indent)
-	e.writeKey(fi.name)
+	e.buf.WriteString(prefix)
+	e.writeKey(key)
 	e.buf.WriteString(" = ")
-	if err := e.encodeValue(fv, fi); err != nil {
+	if err := value(); err != nil {
 		return err
 	}
+	e.writeLineComment(e.optionComment(keyPath, LineCommentPos))
 	e.buf.WriteByte('\n')
+	e.writeCommentBlock(indent, e.optionComment(keyPath, FootCommentPos))
 	return nil
 }
 
@@ -250,25 +255,21 @@ func (e *encoder) encodeTableField(fi fieldInfo, fv reflect.Value, path []string
 	subPath := append(append([]string{}, path...), fi.name)
 
 	if fv.Kind() == reflect.Slice {
-		for i := range fv.Len() {
-			e.writeArrayTableHeader(subPath)
-			if err := e.encodeTable(fv.Index(i), subPath); err != nil {
-				return err
-			}
-		}
-		return nil
+		return e.encodeArrayTables(fv, subPath)
 	}
 
 	if fi.comment != "" {
-		if e.opts.indentTables && len(subPath) > 1 {
-			e.buf.WriteString(e.indentPrefix(len(subPath) - 1))
-		}
+		e.buf.WriteString(e.headerIndent(subPath))
 		e.buf.WriteString("# ")
 		e.buf.WriteString(fi.comment)
 		e.buf.WriteByte('\n')
 	}
 	e.writeTableHeader(subPath)
-	return e.encodeTable(fv, subPath)
+	if err := e.encodeTable(fv, subPath); err != nil {
+		return err
+	}
+	e.writeCommentBlock(e.headerIndent(subPath), e.optionComment(subPath, FootCommentPos))
+	return nil
 }
 
 func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
@@ -412,14 +413,8 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 	case reflect.Array:
 		return e.encodeArray(rv, fi)
 	case reflect.Struct:
-		if fi.inline || e.opts.inlineTable {
-			return e.encodeInlineTable(rv)
-		}
 		return e.encodeInlineTable(rv)
 	case reflect.Map:
-		if fi.inline || e.opts.inlineTable {
-			return e.encodeInlineMap(rv)
-		}
 		return e.encodeInlineMap(rv)
 	default:
 		return fmt.Errorf("%w: %s", errUnsupportedFieldType, rv.Type())
@@ -537,7 +532,7 @@ func (e *encoder) encodeInlineTable(rv reflect.Value) error {
 	first := true
 	for _, fi := range sf.fields {
 		fv := rv.FieldByIndex(fi.index)
-		if fi.omitEmpty && isEmpty(fv) {
+		if (fi.omitEmpty || e.opts.omitEmpty) && isEmpty(fv) {
 			continue
 		}
 		if !first {
@@ -591,54 +586,45 @@ func (e *encoder) emitNode(n *node, path []string) {
 	switch n.kind {
 	case nodeTable:
 		if len(path) > 0 {
-			e.writeTableHeader(path)
+			e.writeHeader(path, false, n.headComment, n.comment)
 		}
-		for _, child := range n.children {
-			switch child.kind {
-			case nodeKeyValue:
-				e.emitKeyValue(child, path)
-			case nodeTable:
-				childPath := append(append([]string{}, path...), child.key...)
-				e.emitNode(child, childPath)
-			case nodeArrayTable:
-				childPath := append(append([]string{}, path...), child.key...)
-				e.emitNode(child, childPath)
-			case nodeComment:
-				e.buf.WriteString("# ")
-				e.buf.WriteString(child.value)
-				e.buf.WriteByte('\n')
-			}
-		}
+		e.emitTableBody(n, path)
 	case nodeArrayTable:
-		e.writeArrayTableHeader(path)
-		for _, child := range n.children {
-			if child.kind == nodeKeyValue {
-				e.emitKeyValue(child, path)
-			}
+		e.writeHeader(path, true, n.headComment, n.comment)
+		e.emitTableBody(n, path)
+	}
+}
+
+// emitTableBody writes a table's key/value pairs and comments, then its foot
+// comment, then its sub-tables, so that no pair lands under a sub-table's
+// header.
+func (e *encoder) emitTableBody(n *node, path []string) {
+	for _, child := range n.children {
+		switch child.kind {
+		case nodeKeyValue:
+			e.emitKeyValue(child)
+		case nodeComment:
+			e.writeCommentBlock("", child.value)
+		}
+	}
+	e.writeCommentBlock("", n.footComment)
+	for _, child := range n.children {
+		if child.kind == nodeTable || child.kind == nodeArrayTable {
+			e.emitNode(child, append(append([]string{}, path...), child.key...))
 		}
 	}
 }
 
-func (e *encoder) emitKeyValue(n *node, _ []string) {
-	if n.headComment != "" {
-		for line := range strings.SplitSeq(n.headComment, "\n") {
-			e.buf.WriteString("# ")
-			e.buf.WriteString(line)
-			e.buf.WriteByte('\n')
-		}
-	}
-	for _, k := range n.key {
-		e.writeKey(k)
-	}
+func (e *encoder) emitKeyValue(n *node) {
+	e.writeCommentBlock("", n.headComment)
+	e.writeDottedKey(n.key)
 	e.buf.WriteString(" = ")
 	if len(n.children) > 0 {
 		e.emitValue(n.children[0])
 	}
-	if n.comment != "" {
-		e.buf.WriteString(" # ")
-		e.buf.WriteString(n.comment)
-	}
+	e.writeLineComment(n.comment)
 	e.buf.WriteByte('\n')
+	e.writeCommentBlock("", n.footComment)
 }
 
 func (e *encoder) emitValue(n *node) {
@@ -680,9 +666,7 @@ func (e *encoder) emitValue(n *node) {
 			if i > 0 {
 				e.buf.WriteString(", ")
 			}
-			for _, k := range child.key {
-				e.writeKey(k)
-			}
+			e.writeDottedKey(child.key)
 			e.buf.WriteString(" = ")
 			if len(child.children) > 0 {
 				e.emitValue(child.children[0])
@@ -699,38 +683,49 @@ func (e *encoder) indentPrefix(depth int) string {
 	return strings.Repeat(" ", depth*e.opts.indent)
 }
 
+// writeTableHeader writes a [table] header with its [WithComment] head and
+// line comments.
 func (e *encoder) writeTableHeader(path []string) {
-	if e.opts.tableSeparator && e.buf.Len() > 0 {
-		e.buf.WriteByte('\n')
-	}
-	if e.opts.indentTables && len(path) > 1 {
-		e.buf.WriteString(e.indentPrefix(len(path) - 1))
-	}
-	e.buf.WriteByte('[')
-	for i, p := range path {
-		if i > 0 {
-			e.buf.WriteByte('.')
-		}
-		e.writeKey(p)
-	}
-	e.buf.WriteString("]\n")
+	e.writeHeader(path, false, e.optionComment(path, HeadCommentPos), e.optionComment(path, LineCommentPos))
 }
 
-func (e *encoder) writeArrayTableHeader(path []string) {
+// writeArrayTableHeader writes a [[table]] header; withComments adds its
+// [WithComment] head and line comments.
+func (e *encoder) writeArrayTableHeader(path []string, withComments bool) {
+	var head, line string
+	if withComments {
+		head, line = e.optionComment(path, HeadCommentPos), e.optionComment(path, LineCommentPos)
+	}
+	e.writeHeader(path, true, head, line)
+}
+
+func (e *encoder) writeHeader(path []string, array bool, head, line string) {
 	if e.opts.tableSeparator && e.buf.Len() > 0 {
 		e.buf.WriteByte('\n')
 	}
+	indent := e.headerIndent(path)
+	e.writeCommentBlock(indent, head)
+	e.buf.WriteString(indent)
+	if array {
+		e.buf.WriteString("[[")
+	} else {
+		e.buf.WriteByte('[')
+	}
+	e.writeDottedKey(path)
+	if array {
+		e.buf.WriteString("]]")
+	} else {
+		e.buf.WriteByte(']')
+	}
+	e.writeLineComment(line)
+	e.buf.WriteByte('\n')
+}
+
+func (e *encoder) headerIndent(path []string) string {
 	if e.opts.indentTables && len(path) > 1 {
-		e.buf.WriteString(e.indentPrefix(len(path) - 1))
+		return e.indentPrefix(len(path) - 1)
 	}
-	e.buf.WriteString("[[")
-	for i, p := range path {
-		if i > 0 {
-			e.buf.WriteByte('.')
-		}
-		e.writeKey(p)
-	}
-	e.buf.WriteString("]]\n")
+	return ""
 }
 
 func (e *encoder) writeKey(key string) {
@@ -743,27 +738,59 @@ func (e *encoder) writeKey(key string) {
 	}
 }
 
-func (e *encoder) writeComment(key string, path []string) {
+func (e *encoder) writeDottedKey(keys []string) {
+	for i, k := range keys {
+		if i > 0 {
+			e.buf.WriteByte('.')
+		}
+		e.writeKey(k)
+	}
+}
+
+// optionComment returns the [WithComment] texts at pos for the node at path,
+// joined by newlines.
+func (e *encoder) optionComment(path []string, pos CommentPosition) string {
 	if e.opts.comments == nil {
-		return
+		return ""
 	}
-	fullKey := key
-	if len(path) > 0 {
-		fullKey = strings.Join(path, ".") + "." + key
-	}
-	comments, ok := e.opts.comments[fullKey]
-	if !ok {
-		return
-	}
-	indent := e.indentPrefix(len(path))
-	for _, c := range comments {
-		if c.Position == HeadCommentPos {
-			e.buf.WriteString(indent)
-			e.buf.WriteString("# ")
-			e.buf.WriteString(c.Text)
-			e.buf.WriteByte('\n')
+	var texts []string
+	for _, c := range e.opts.comments[strings.Join(path, ".")] {
+		if c.Position == pos {
+			texts = append(texts, c.Text)
 		}
 	}
+	return strings.Join(texts, "\n")
+}
+
+// writeCommentBlock writes each line of text as an indented comment line.
+func (e *encoder) writeCommentBlock(indent, text string) {
+	if text == "" {
+		return
+	}
+	for line := range strings.SplitSeq(text, "\n") {
+		e.buf.WriteString(indent)
+		e.buf.WriteString(commentText(line))
+		e.buf.WriteByte('\n')
+	}
+}
+
+// writeLineComment writes text as a comment after a value or header.
+func (e *encoder) writeLineComment(text string) {
+	if text == "" {
+		return
+	}
+	e.buf.WriteByte(' ')
+	e.buf.WriteString(commentText(strings.ReplaceAll(text, "\n", " ")))
+}
+
+// commentText returns text as a comment: "#" followed by a space unless text
+// is empty or already starts with whitespace, so a parsed comment's text is
+// written back unchanged.
+func commentText(text string) string {
+	if text == "" || text[0] == ' ' || text[0] == '\t' {
+		return "#" + text
+	}
+	return "# " + text
 }
 
 func isBareKey(key string) bool {

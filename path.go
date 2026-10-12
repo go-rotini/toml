@@ -36,6 +36,9 @@ type indexSegment struct {
 }
 
 func (s indexSegment) match(n *Node) []*Node {
+	if arr := arrayValue(n); arr != nil {
+		n = arr
+	}
 	idx := s.index
 	if idx < 0 {
 		idx = len(n.Children) + idx
@@ -76,8 +79,12 @@ func (s recursiveSegment) match(n *Node) []*Node {
 //   - .* — all children
 //   - $..key — nodes at any depth whose key is key
 //
-// A key matches a [KeyValueNode], whose only child is its value, so element
-// i of an array value is $.key[0][i].
+// A key matches a [KeyValueNode], whose only child is its value. Indexing a
+// pair whose value is an array selects the array's elements, so $.arr[0] is
+// the first element of arr and $.arr[0][1] the second element of that one.
+// Indexing any other node selects among its children. An array of tables
+// ([[name]]) is a run of [ArrayTableNode] siblings, so $.name matches every
+// entry and $.name[i] the i-th child of each.
 func PathString(expr string) (*Path, error) {
 	if expr == "" || expr[0] != '$' {
 		return nil, fmt.Errorf("%w: path must start with $", ErrPathSyntax)
@@ -201,6 +208,15 @@ func (s pointerSegment) match(n *Node) []*Node {
 	return nil
 }
 
+// arrayValue returns the array value of a key/value pair, or nil when n is
+// not a pair holding an array.
+func arrayValue(n *Node) *Node {
+	if n.Kind == KeyValueNode && len(n.Children) == 1 && n.Children[0].Kind == ArrayNode {
+		return n.Children[0]
+	}
+	return nil
+}
+
 // pointerValue unwraps a key/value pair to its value node so a subsequent
 // pointer token descends into the value rather than the pair.
 func pointerValue(n *Node) *Node {
@@ -262,36 +278,20 @@ func (p *Path) ReadPositions(n *Node) ([]Position, error) {
 	return positions, nil
 }
 
-// Replace replaces the first matching node with the given replacement.
+// Replace replaces the first matching node with the given replacement. When
+// the match is a key/value pair's value, as a [PathPointer] key token
+// selects, the value is replaced and the key kept.
 func (p *Path) Replace(n, replacement *Node) error {
-	if len(p.segments) == 0 {
+	parent, target, err := p.first(n)
+	if err != nil {
+		return err
+	}
+	owner, i := findOwner(parent, target)
+	if owner == nil {
 		return ErrPathNotFound
 	}
-
-	// Navigate to the parent of the target
-	parent := n
-	for _, seg := range p.segments[:len(p.segments)-1] {
-		matches := seg.match(parent)
-		if len(matches) == 0 {
-			return ErrPathNotFound
-		}
-		parent = matches[0]
-	}
-
-	lastSeg := p.segments[len(p.segments)-1]
-	matches := lastSeg.match(parent)
-	if len(matches) == 0 {
-		return ErrPathNotFound
-	}
-
-	target := matches[0]
-	for i, child := range parent.Children {
-		if child == target {
-			parent.Children[i] = replacement
-			return nil
-		}
-	}
-	return ErrPathNotFound
+	owner.Children[i] = replacement
+	return nil
 }
 
 // Append adds a child node to the first matching node.
@@ -307,35 +307,62 @@ func (p *Path) Append(n, value *Node) error {
 	return nil
 }
 
-// Delete removes the first matching node.
+// Delete removes the first matching node. When the match is a key/value
+// pair's value, as a [PathPointer] key token selects, the whole pair is
+// removed.
 func (p *Path) Delete(n *Node) error {
-	if len(p.segments) == 0 {
+	parent, target, err := p.first(n)
+	if err != nil {
+		return err
+	}
+	owner, i := findOwner(parent, target)
+	if owner == nil {
 		return ErrPathNotFound
 	}
+	if owner.Kind == KeyValueNode {
+		if pairOwner, j := findOwner(parent, owner); pairOwner != nil {
+			owner, i = pairOwner, j
+		}
+	}
+	owner.Children = append(owner.Children[:i], owner.Children[i+1:]...)
+	return nil
+}
 
-	parent := n
+// first follows the first match of each segment and returns the node the
+// last segment was matched against and that segment's first match.
+func (p *Path) first(n *Node) (parent, target *Node, err error) {
+	if n == nil || len(p.segments) == 0 {
+		return nil, nil, ErrPathNotFound
+	}
+	parent = n
 	for _, seg := range p.segments[:len(p.segments)-1] {
 		matches := seg.match(parent)
 		if len(matches) == 0 {
-			return ErrPathNotFound
+			return nil, nil, ErrPathNotFound
 		}
 		parent = matches[0]
 	}
-
-	lastSeg := p.segments[len(p.segments)-1]
-	matches := lastSeg.match(parent)
+	matches := p.segments[len(p.segments)-1].match(parent)
 	if len(matches) == 0 {
-		return ErrPathNotFound
+		return nil, nil, ErrPathNotFound
 	}
+	return parent, matches[0], nil
+}
 
-	target := matches[0]
-	for i, child := range parent.Children {
+// findOwner returns the node under root (root included) whose Children
+// holds target, and target's index there, or nil if there is none.
+func findOwner(root, target *Node) (*Node, int) {
+	for i, child := range root.Children {
 		if child == target {
-			parent.Children = append(parent.Children[:i], parent.Children[i+1:]...)
-			return nil
+			return root, i
 		}
 	}
-	return ErrPathNotFound
+	for _, child := range root.Children {
+		if owner, i := findOwner(child, target); owner != nil {
+			return owner, i
+		}
+	}
+	return nil, 0
 }
 
 // String returns the original path expression.

@@ -1,8 +1,10 @@
 package toml
 
 import (
+	"bytes"
 	"context"
 	"encoding"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -13,16 +15,19 @@ import (
 )
 
 // Unmarshaler is implemented by types that control their own TOML
-// decoding. The unmarshal function stores the TOML value, in the form
-// decoding into an any produces (string, int64, float64, bool, a date or
-// time type, []any, or map[string]any), into the pointer it is given. That
-// value must be assignable to the pointer's element type, as it is to an any.
+// decoding. It is used for values, inline tables and [table] sections alike.
+// The unmarshal function decodes the TOML value into the pointer it is given,
+// as [Unmarshal] would; an any receives the form decoding into an any
+// produces (string, int64, float64, bool, a date or time type, []any, or
+// map[string]any). A value that does not fit returns a [TypeError].
 type Unmarshaler interface {
 	UnmarshalTOML(unmarshal func(any) error) error
 }
 
-// BytesUnmarshaler is implemented by types that can decode themselves
-// directly from raw TOML bytes.
+// BytesUnmarshaler is implemented by types that decode themselves from TOML
+// bytes. For a scalar the bytes are its text (a string's contents, otherwise
+// the literal as written); for an array or inline table they are its TOML
+// source; for a [table] section they are its contents written as TOML.
 type BytesUnmarshaler interface {
 	UnmarshalTOML(data []byte) error
 }
@@ -35,6 +40,8 @@ type UnmarshalerContext interface {
 type decoder struct {
 	opts       *decoderOptions
 	ctx        context.Context
+	src        []byte       // the scanner's normalized source, which node spans index
+	skipHook   reflect.Type // the next unmarshalCustom call for this type is skipped
 	typeErrors []string
 	depth      int
 	keyCount   int
@@ -76,6 +83,10 @@ func (d *decoder) decodeTable(n *node, rv reflect.Value) error {
 			rv.Set(reflect.New(rv.Type().Elem()))
 		}
 		rv = rv.Elem()
+	}
+
+	if handled, err := d.unmarshalCustom(n, rv); handled {
+		return err
 	}
 
 	switch rv.Kind() {
@@ -378,50 +389,11 @@ func (d *decoder) decodeValue(n *node, rv reflect.Value) error {
 		rv = rv.Elem()
 	}
 
-	if rv.CanAddr() && rv.Addr().CanInterface() {
-		iface := rv.Addr().Interface()
-		if u, ok := iface.(UnmarshalerContext); ok {
-			return u.UnmarshalTOML(d.ctx, func(v any) error {
-				val, err := d.nodeToInterface(n)
-				if err != nil {
-					return err
-				}
-				return setInterface(v, val)
-			})
-		}
-		if u, ok := iface.(Unmarshaler); ok {
-			return u.UnmarshalTOML(func(v any) error {
-				val, err := d.nodeToInterface(n)
-				if err != nil {
-					return err
-				}
-				return setInterface(v, val)
-			})
-		}
-		if u, ok := iface.(BytesUnmarshaler); ok {
-			raw := nodeRawBytes(n)
-			return u.UnmarshalTOML(raw)
-		}
-		if u, ok := iface.(encoding.TextUnmarshaler); ok {
-			if n.kind == nodeString || n.kind == nodeInteger || n.kind == nodeFloat || n.kind == nodeBoolean {
-				return u.UnmarshalText([]byte(n.value))
-			}
-		}
+	if n.kind == nodeInlineTable || n.kind == nodeTable {
+		return d.decodeTable(n, rv)
 	}
-
-	if d.opts.customUnmarshalers != nil {
-		if fn, ok := d.opts.customUnmarshalers[rv.Type()]; ok {
-			raw := nodeRawBytes(n)
-			ptr := reflect.New(rv.Type())
-			result := reflect.ValueOf(fn).Call([]reflect.Value{ptr, reflect.ValueOf(raw)})
-			if !result[0].IsNil() {
-				if err, ok := reflect.TypeAssert[error](result[0]); ok {
-					return err
-				}
-			}
-			rv.Set(ptr.Elem())
-			return nil
-		}
+	if handled, err := d.unmarshalCustom(n, rv); handled {
+		return err
 	}
 
 	switch n.kind {
@@ -443,10 +415,6 @@ func (d *decoder) decodeValue(n *node, rv reflect.Value) error {
 		return d.decodeLocalTime(n.value, rv)
 	case nodeArray:
 		return d.decodeArray(n, rv)
-	case nodeInlineTable:
-		return d.decodeTable(n, rv)
-	case nodeTable:
-		return d.decodeTable(n, rv)
 	default:
 		d.typeErrors = append(d.typeErrors, fmt.Sprintf("unexpected node kind %d", n.kind))
 		return nil
@@ -899,13 +867,112 @@ func (d *decoder) caseInsensitiveLookup(sf *structFields, key string) int {
 	return -1
 }
 
-func setInterface(target, value any) error {
-	rv := reflect.ValueOf(target)
-	if rv.Kind() != reflect.Pointer {
-		return errNonPointerTarget
+// unmarshalCustom decodes n with the first hook rv's type provides: an
+// [UnmarshalerContext], [Unmarshaler], [BytesUnmarshaler], an
+// [encoding.TextUnmarshaler] (scalars only), a [WithCustomUnmarshaler]
+// function, or, with [WithJSONUnmarshaler], a [json.Unmarshaler]. It reports
+// whether a hook handled the value.
+func (d *decoder) unmarshalCustom(n *node, rv reflect.Value) (bool, error) {
+	if d.skipHook != nil && d.skipHook == rv.Type() {
+		d.skipHook = nil
+		return false, nil
 	}
-	rv = rv.Elem()
-	rv.Set(reflect.ValueOf(value))
+	if rv.CanAddr() && rv.Addr().CanInterface() {
+		iface := rv.Addr().Interface()
+		if u, ok := iface.(UnmarshalerContext); ok {
+			return true, u.UnmarshalTOML(d.ctx, d.unmarshalFunc(n, rv.Type()))
+		}
+		if u, ok := iface.(Unmarshaler); ok {
+			return true, u.UnmarshalTOML(d.unmarshalFunc(n, rv.Type()))
+		}
+		if u, ok := iface.(BytesUnmarshaler); ok {
+			return true, u.UnmarshalTOML(d.rawBytes(n))
+		}
+		if u, ok := iface.(encoding.TextUnmarshaler); ok {
+			if n.kind == nodeString || n.kind == nodeInteger || n.kind == nodeFloat || n.kind == nodeBoolean {
+				return true, u.UnmarshalText([]byte(n.value))
+			}
+		}
+	}
+
+	if fn, ok := d.opts.customUnmarshalers[rv.Type()]; ok {
+		ptr := reflect.New(rv.Type())
+		result := reflect.ValueOf(fn).Call([]reflect.Value{ptr, reflect.ValueOf(d.rawBytes(n))})
+		if !result[0].IsNil() {
+			if err, ok := reflect.TypeAssert[error](result[0]); ok {
+				return true, err
+			}
+		}
+		rv.Set(ptr.Elem())
+		return true, nil
+	}
+
+	if d.opts.useJSONUnmarshaler && !isScalarStruct(rv.Type()) && rv.CanAddr() && rv.Addr().CanInterface() {
+		if u, ok := reflect.TypeAssert[json.Unmarshaler](rv.Addr()); ok {
+			return true, d.unmarshalJSON(n, u)
+		}
+	}
+	return false, nil
+}
+
+// unmarshalFunc returns the callback handed to an [Unmarshaler]. The value
+// is stored as is when it is assignable to the target and decoded into the
+// target otherwise; a value that does not fit returns a [TypeError]. Decoding
+// into the unmarshaler's own type, self, skips its hook so it cannot recurse.
+func (d *decoder) unmarshalFunc(n *node, self reflect.Type) func(any) error {
+	return func(v any) error {
+		rv := reflect.ValueOf(v)
+		if rv.Kind() != reflect.Pointer || rv.IsNil() {
+			return errNonPointerTarget
+		}
+		val, err := d.nodeToInterface(n)
+		if err != nil {
+			return err
+		}
+		if vv := reflect.ValueOf(val); vv.IsValid() && vv.Type().AssignableTo(rv.Elem().Type()) {
+			rv.Elem().Set(vv)
+			return nil
+		}
+		mark := len(d.typeErrors)
+		if rv.Elem().Type() == self {
+			d.skipHook = self
+		}
+		switch n.kind {
+		case nodeTable, nodeArrayTable:
+			err = d.decodeTable(n, rv.Elem())
+		default:
+			err = d.decodeValue(n, rv.Elem())
+		}
+		d.skipHook = nil
+		if err != nil {
+			return err
+		}
+		if len(d.typeErrors) > mark {
+			errs := append([]string(nil), d.typeErrors[mark:]...)
+			d.typeErrors = d.typeErrors[:mark]
+			return &TypeError{Errors: errs}
+		}
+		return nil
+	}
+}
+
+// unmarshalJSON passes the JSON encoding of n to u. Tables become JSON
+// objects even when [WithOrderedMap] is set.
+func (d *decoder) unmarshalJSON(n *node, u json.Unmarshaler) error {
+	opts := *d.opts
+	opts.useOrderedMap = false
+	plain := &decoder{opts: &opts, ctx: d.ctx, src: d.src}
+	val, err := plain.nodeToInterface(n)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(val)
+	if err != nil {
+		return fmt.Errorf("toml: json: %w", err)
+	}
+	if err := u.UnmarshalJSON(data); err != nil {
+		return fmt.Errorf("toml: %w", err)
+	}
 	return nil
 }
 
@@ -926,8 +993,25 @@ func setTextUnmarshalerKey(rv reflect.Value, key string) error {
 	return fmt.Errorf("%w: %s", errUnsupportedKeyType, rv.Type())
 }
 
-func nodeRawBytes(n *node) []byte {
-	return []byte(n.value)
+// rawBytes returns what a [BytesUnmarshaler] or custom unmarshaler receives
+// for n: a scalar's text, an array's or inline table's TOML source, and a
+// table's contents written as TOML.
+func (d *decoder) rawBytes(n *node) []byte {
+	switch n.kind {
+	case nodeArray, nodeInlineTable:
+		if n.span.start < n.span.end && n.span.end <= len(d.src) {
+			return bytes.Clone(d.src[n.span.start:n.span.end])
+		}
+		e := newEncoder(defaultEncodeOptions())
+		e.emitValue(n)
+		return e.buf.Bytes()
+	case nodeTable, nodeArrayTable:
+		e := newEncoder(defaultEncodeOptions())
+		e.emitTableBody(n, nil)
+		return e.buf.Bytes()
+	default:
+		return []byte(n.value)
+	}
 }
 
 func normalizeDateTimeSeparators(s string) string {

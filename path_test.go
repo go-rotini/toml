@@ -1028,3 +1028,71 @@ func TestPathPointerNotFound(t *testing.T) {
 		t.Errorf("error = %v, want ErrPathNotFound", err)
 	}
 }
+
+func TestPathPointerReplaceDelete(t *testing.T) {
+	root := mustParse(t, "a = 1\nb = 2\narr = [1, 2, 3]\n\n[srv]\nport = 80\n")
+
+	p, err := PathPointer("/srv/port")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Replace(root, &Node{Kind: IntegerNode, Value: "8080"}); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	if v, _ := p.ReadString(root); v != "8080" {
+		t.Errorf("port = %q", v)
+	}
+
+	p, _ = PathPointer("/arr/1")
+	if err := p.Delete(root); err != nil {
+		t.Fatalf("Delete element: %v", err)
+	}
+	p, _ = PathPointer("/a")
+	if err := p.Delete(root); err != nil {
+		t.Fatalf("Delete key: %v", err)
+	}
+	out, err := NodeToBytes(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "b = 2\narr = [1, 3]\n\n[srv]\nport = 8080\n"
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestPathIndexAddressesArrayElements(t *testing.T) {
+	root := mustParse(t, "arr = [\"a\", \"b\", \"c\"]\nm = [[1, 2], [3, 4]]\n")
+	for expr, want := range map[string]string{
+		"$.arr[0]":  "a",
+		"$.arr[-1]": "c",
+		"$.m[1][0]": "3",
+	} {
+		p, err := PathString(expr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := p.ReadString(root)
+		if err != nil || got != want {
+			t.Errorf("%s = %q, %v; want %q", expr, got, err, want)
+		}
+	}
+
+	p, _ := PathString("$.arr[1]")
+	if err := p.Replace(root, &Node{Kind: StringNode, Value: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = PathString("$.arr[0]")
+	if err := p.Delete(root); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = PathString("$.arr")
+	nodes, err := p.Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arr := nodes[0].Children[0]
+	if len(arr.Children) != 2 || arr.Children[0].Value != "B" || arr.Children[1].Value != "c" {
+		t.Errorf("arr = %v", arr.Children)
+	}
+}

@@ -43,6 +43,7 @@ func UnmarshalWithOptions(data []byte, v any, opts ...DecodeOption) error {
 	}
 
 	d := newDecoder(o)
+	d.src = s.src
 	return d.decode(root, v)
 }
 
@@ -120,6 +121,7 @@ func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 	}
 
 	d := newDecoder(dec.opts)
+	d.src = sc.src
 	d.ctx = ctx
 	return d.decode(root, v)
 }

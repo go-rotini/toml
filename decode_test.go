@@ -752,7 +752,7 @@ func TestApplyDefaultUnsupportedType(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. setInterface coverage
+// 2. UnmarshalerContext coverage
 // ---------------------------------------------------------------------------
 
 type ctxUnmarshaler struct {
@@ -2699,7 +2699,7 @@ type errorCtxUnmarshaler struct {
 }
 
 func (u *errorCtxUnmarshaler) UnmarshalTOML(_ context.Context, unmarshal func(any) error) error {
-	// Pass a non-pointer to trigger setInterface error
+	// Pass a non-pointer to trigger a callback error
 	var s string
 	return unmarshal(s)
 }
@@ -2725,7 +2725,7 @@ type errorFuncUnmarshaler struct {
 }
 
 func (u *errorFuncUnmarshaler) UnmarshalTOML(unmarshal func(any) error) error {
-	// Pass a non-pointer to trigger setInterface error
+	// Pass a non-pointer to trigger a callback error
 	var s string
 	return unmarshal(s)
 }
@@ -3058,7 +3058,7 @@ func TestDecodeOrderedMapWithComment(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 91. setInterface — non-pointer target (lines 896-898)
+// 91. Unmarshaler callback — non-pointer target
 // ---------------------------------------------------------------------------
 
 func TestDecodeUnmarshalerNonPointerTarget(t *testing.T) {
@@ -3069,7 +3069,7 @@ func TestDecodeUnmarshalerNonPointerTarget(t *testing.T) {
 	var cfg Config
 	err := Unmarshal([]byte(input), &cfg)
 	if err == nil {
-		t.Fatal("expected error for non-pointer target in setInterface")
+		t.Fatal("expected error for non-pointer target in the unmarshal callback")
 	}
 	if !strings.Contains(err.Error(), "non-pointer") {
 		t.Errorf("error = %v, want non-pointer message", err)
@@ -3301,3 +3301,131 @@ var (
 	_                          = fmt.Sprintf
 	_ encoding.TextUnmarshaler = (*textKey)(nil)
 )
+
+type rawBytes struct{ data string }
+
+func (r *rawBytes) UnmarshalTOML(data []byte) error {
+	r.data = string(data)
+	return nil
+}
+
+func TestBytesUnmarshalerGetsSourceForArraysAndTables(t *testing.T) {
+	type S struct {
+		Arr    rawBytes `toml:"arr"`
+		Inline rawBytes `toml:"inline"`
+		Scalar rawBytes `toml:"scalar"`
+		Table  rawBytes `toml:"table"`
+	}
+	src := "arr = [1, \"two\", [3]]\ninline = { a = 1, b.c = \"x\" }\nscalar = \"hi\"\n\n[table]\nk = 1\n"
+	var v S
+	if err := Unmarshal([]byte(src), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Arr.data != `[1, "two", [3]]` {
+		t.Errorf("arr = %q", v.Arr.data)
+	}
+	if v.Inline.data != `{ a = 1, b.c = "x" }` {
+		t.Errorf("inline = %q", v.Inline.data)
+	}
+	if v.Scalar.data != "hi" {
+		t.Errorf("scalar = %q", v.Scalar.data)
+	}
+	if v.Table.data != "k = 1\n" {
+		t.Errorf("table = %q", v.Table.data)
+	}
+
+	type C struct {
+		Wrapped []int `toml:"wrapped"`
+	}
+	var got string
+	opt := WithCustomUnmarshaler(func(_ *[]int, data []byte) error {
+		got = string(data)
+		return nil
+	})
+	if err := UnmarshalWithOptions([]byte("wrapped = [1, 2]\n"), &C{}, opt); err != nil {
+		t.Fatal(err)
+	}
+	if got != "[1, 2]" {
+		t.Errorf("custom unmarshaler got %q", got)
+	}
+}
+
+type wrongTarget struct{}
+
+func (w *wrongTarget) UnmarshalTOML(unmarshal func(any) error) error {
+	var n int
+	return unmarshal(&n)
+}
+
+func TestUnmarshalerWrongPointerTypeReturnsTypeError(t *testing.T) {
+	var v struct {
+		W wrongTarget `toml:"w"`
+	}
+	err := Unmarshal([]byte(`w = "text"`), &v)
+	if !errors.Is(err, ErrType) {
+		t.Fatalf("err = %v, want ErrType", err)
+	}
+}
+
+type jsonOnly struct{ got string }
+
+func (j *jsonOnly) UnmarshalJSON(data []byte) error {
+	j.got = string(data)
+	return nil
+}
+
+func TestWithJSONUnmarshalerUsesUnmarshalJSON(t *testing.T) {
+	type S struct {
+		Scalar jsonOnly  `toml:"scalar"`
+		Arr    jsonOnly  `toml:"arr"`
+		Table  jsonOnly  `toml:"table"`
+		When   time.Time `toml:"when"`
+	}
+	src := "scalar = 3\narr = [\"a\", true]\nwhen = 1979-05-27\n\n[table]\nk = \"v\"\n"
+	var v S
+	if err := UnmarshalWithOptions([]byte(src), &v, WithJSONUnmarshaler(), WithOrderedMap()); err != nil {
+		t.Fatal(err)
+	}
+	if v.Scalar.got != "3" || v.Arr.got != `["a",true]` || v.Table.got != `{"k":"v"}` {
+		t.Errorf("got scalar=%q arr=%q table=%q", v.Scalar.got, v.Arr.got, v.Table.got)
+	}
+	if v.When.Year() != 1979 {
+		t.Errorf("when = %v", v.When)
+	}
+
+	var plain S
+	if err := Unmarshal([]byte(src), &plain); !errors.Is(err, ErrType) {
+		t.Fatalf("err = %v, want ErrType", err)
+	}
+	if plain.Scalar.got != "" || plain.Table.got != "" {
+		t.Errorf("UnmarshalJSON called without the option: %+v", plain)
+	}
+}
+
+type selfDecoding struct {
+	X     int `toml:"x"`
+	Calls int `toml:"-"`
+}
+
+func (s *selfDecoding) UnmarshalTOML(unmarshal func(any) error) error {
+	s.Calls++
+	return unmarshal(s)
+}
+
+func TestUnmarshalerDecodesIntoStructTargets(t *testing.T) {
+	var v struct {
+		Inline acceptancePoint `toml:"inline"`
+		Header acceptancePoint `toml:"header"`
+		Self   selfDecoding    `toml:"self"`
+	}
+	src := "inline = { x = 1, y = 2 }\n\n[header]\nx = 3\ny = 4\n\n[self]\nx = 5\n"
+	if err := Unmarshal([]byte(src), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Inline != (acceptancePoint{1, 2}) || v.Header != (acceptancePoint{3, 4}) {
+		t.Errorf("inline = %+v, header = %+v", v.Inline, v.Header)
+	}
+	if v.Self.X != 5 || v.Self.Calls != 1 {
+		t.Errorf("self = %+v", v.Self)
+	}
+}

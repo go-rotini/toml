@@ -88,7 +88,7 @@ type Node struct {
 	Pos         Position
 	Comment     string // line comment after the value or header: the text following #
 	HeadComment string // comment lines before this node, joined by newlines
-	FootComment string // comment block after this node
+	FootComment string // comment lines after this node; Parse sets it on a table for comments after its contents that a blank line separates from the next header, or that end the input
 	Span        Span   // the node's source text; see [Span]
 	KeySpan     Span   // for KeyValueNode/TableNode/ArrayTableNode: the key as written, every dotted segment included
 }
@@ -137,7 +137,9 @@ func (n *Node) Validate() error {
 
 // File is the result of parsing a TOML byte stream.
 type File struct {
-	Root     *Node
+	Root *Node
+	// Deprecated: Warnings is always nil. TOML parsing either succeeds or
+	// returns an error, so there is nothing to warn about.
 	Warnings []string
 }
 
@@ -159,8 +161,7 @@ func Parse(data []byte) (*File, error) {
 	}
 
 	file := &File{
-		Root:     exportNode(root, s.spanOf),
-		Warnings: p.warnings,
+		Root: exportNode(root, s.spanOf),
 	}
 	return file, nil
 }
@@ -197,8 +198,9 @@ func Filter(n *Node, fn func(*Node) bool) []*Node {
 }
 
 // NodeToBytes serializes a [Node] tree into TOML using default encoding
-// options. The output is regenerated rather than a copy of the source layout;
-// to edit a parsed document in place, use [Node.Span].
+// options. The output is regenerated rather than a copy of the source layout,
+// though each node's head, line and foot comments are kept; to edit a parsed
+// document in place, use [Node.Span].
 func NodeToBytes(n *Node) ([]byte, error) {
 	internal := importNode(n)
 	enc := newEncoder(defaultEncodeOptions())

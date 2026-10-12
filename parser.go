@@ -18,7 +18,7 @@ type parser struct {
 	staticArrays   map[string]bool
 	dottedImplicit map[string]bool
 	explicitTables map[string]bool
-	warnings       []string
+	commentBreak   int // pendingComment[:commentBreak] ends before a blank line
 	maxNodes       int
 	nodeCount      int
 	pendingComment []string
@@ -55,6 +55,9 @@ func (p *parser) parse() (*node, error) {
 		case tokenStreamStart, tokenStreamEnd:
 			p.advance()
 		case tokenNewline:
+			if len(p.pendingComment) > 0 && p.pos > 0 && p.tokens[p.pos-1].kind == tokenNewline {
+				p.commentBreak = len(p.pendingComment)
+			}
 			p.advance()
 		case tokenComment:
 			p.parseComment()
@@ -77,16 +80,41 @@ func (p *parser) parse() (*node, error) {
 		}
 	}
 
+	if len(p.pendingComment) > 0 {
+		p.addFootComment(len(p.pendingComment))
+	}
 	return p.root, nil
 }
 
 func (p *parser) consumeHeadComment() string {
+	p.commentBreak = 0
 	if len(p.pendingComment) == 0 {
 		return ""
 	}
 	s := strings.Join(p.pendingComment, "\n")
 	p.pendingComment = nil
 	return s
+}
+
+// consumeFootComment runs before a table header. The pending comments that a
+// blank line separates from the header become the foot comment of the
+// current table, provided the table has contents for them to follow.
+func (p *parser) consumeFootComment() {
+	if p.commentBreak > 0 && len(p.current.children) > 0 {
+		p.addFootComment(p.commentBreak)
+	}
+}
+
+// addFootComment moves the first n pending comments to the current table's
+// foot comment.
+func (p *parser) addFootComment(n int) {
+	foot := strings.Join(p.pendingComment[:n], "\n")
+	if p.current.footComment != "" {
+		foot = p.current.footComment + "\n" + foot
+	}
+	p.current.footComment = foot
+	p.pendingComment = p.pendingComment[n:]
+	p.commentBreak = 0
 }
 
 func (p *parser) consumeLineComment() string {
@@ -104,6 +132,7 @@ func (p *parser) parseComment() {
 }
 
 func (p *parser) parseTable() error {
+	p.consumeFootComment()
 	headComment := p.consumeHeadComment()
 
 	open := p.peek()
@@ -161,6 +190,7 @@ func (p *parser) parseTable() error {
 }
 
 func (p *parser) parseArrayTable() error {
+	p.consumeFootComment()
 	headComment := p.consumeHeadComment()
 
 	open := p.peek()
