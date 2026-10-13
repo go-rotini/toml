@@ -12,13 +12,13 @@ import (
 // as written. Replacing that range with other text edits the node in place
 // and leaves every other byte, comments and layout included, untouched.
 //
-// Span offsets index the bytes passed to [Parse], including a leading
-// byte-order mark and the \r of each \r\n line ending; Line and Column are
-// 1-based, with Column counted in characters. These differ from [Node.Pos],
-// which marks where a node's token ends, and from error positions such as
-// [SyntaxError.Pos], which mark where the offending key or token begins, or
-// where scanning stopped in a malformed one: both index the source after
-// byte-order mark and \r\n normalization.
+// Span offsets, [Node.Pos] offsets and error positions such as
+// [SyntaxError.Pos] all index the bytes passed to [Parse], including a
+// leading byte-order mark and the \r of each \r\n line ending; Line and
+// Column are 1-based, with Column counted in characters. They differ in
+// what they mark: [Node.Pos] marks where a node's token ends, and an error
+// position marks where the offending key or token begins, or where
+// scanning stopped in a malformed one.
 //
 // What a node's Span covers depends on its kind:
 //   - a scalar: the literal with its quotes or delimiters, all lines of a
@@ -130,22 +130,15 @@ func (s *scanner) inputPositions(n *node) {
 // inputErrorPos maps the Offset of a positioned error from the scanner or
 // parser to the input.
 func (s *scanner) inputErrorPos(err error) error {
-	var (
-		se  *SyntaxError
-		de  *DuplicateKeyError
-		ce  *ConflictError
-		ie  *InlineTableError
-		pos *Position
-	)
-	switch {
-	case errors.As(err, &se):
-		pos = &se.Pos
-	case errors.As(err, &de):
-		pos = &de.Pos
-	case errors.As(err, &ce):
-		pos = &ce.Pos
-	case errors.As(err, &ie):
-		pos = &ie.Pos
+	var pos *Position
+	if e, ok := errors.AsType[*SyntaxError](err); ok {
+		pos = &e.Pos
+	} else if e, ok := errors.AsType[*DuplicateKeyError](err); ok {
+		pos = &e.Pos
+	} else if e, ok := errors.AsType[*ConflictError](err); ok {
+		pos = &e.Pos
+	} else if e, ok := errors.AsType[*InlineTableError](err); ok {
+		pos = &e.Pos
 	}
 	if pos != nil && pos.Line > 0 {
 		pos.Offset = s.inputOffset(pos.Offset)

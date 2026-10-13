@@ -3820,15 +3820,56 @@ func TestFloat32RangeEdge(t *testing.T) {
 			t.Errorf("%q: got %v, %v; want %v", out, back.F, err, f)
 		}
 	}
-	// Half a last-place unit above MaxFloat32 rounds up to infinity.
-	edge := strconv.FormatFloat(math.MaxFloat32+0x1p103, 'g', -1, 64)
-	below := strconv.FormatFloat(math.Nextafter(math.MaxFloat32+0x1p103, 0), 'g', -1, 64)
-	var s S
-	if err := Unmarshal([]byte("f = "+edge+"\n"), &s); !errors.Is(err, ErrOverflow) {
-		t.Errorf("f = %s: err = %v, want OverflowError", edge, err)
+	// The rounding point is MaxFloat32 plus half a last-place unit,
+	// 3.40282356779733661637539395458142568448e38: text from there up
+	// overflows, and text below it, even when its nearest float64 is the
+	// rounding point, decodes to MaxFloat32.
+	for _, text := range []string{
+		"3.4028236e38",
+		"3.40282356779733661637539395458142568448e38",
+		"-3.402823567797336616375393954581425684480e38",
+	} {
+		var s S
+		if err := Unmarshal([]byte("f = "+text+"\n"), &s); !errors.Is(err, ErrOverflow) {
+			t.Errorf("f = %s: err = %v, want OverflowError", text, err)
+		}
 	}
-	if err := Unmarshal([]byte("f = "+below+"\n"), &s); err != nil || s.F != math.MaxFloat32 {
-		t.Errorf("f = %s: %v, %v; want MaxFloat32", below, s.F, err)
+	for _, text := range []string{
+		"3.4028235677973366e+38",
+		"3.402823567797336616375393954581425684479e38",
+		"3.402_823_567_797_336_616_375_393_954_581_425_684_479e38",
+		strconv.FormatFloat(math.Nextafter(math.MaxFloat32+0x1p103, 0), 'g', -1, 64),
+	} {
+		var s S
+		if err := Unmarshal([]byte("f = "+text+"\n"), &s); err != nil || s.F != math.MaxFloat32 {
+			t.Errorf("f = %s: %v, %v; want MaxFloat32", text, s.F, err)
+		}
+	}
+	var s S
+	if err := Unmarshal([]byte("f = -3.4028235677973366e38\n"), &s); err != nil || s.F != -math.MaxFloat32 {
+		t.Errorf("negative text below the rounding point: %v, %v; want -MaxFloat32", s.F, err)
+	}
+	// One rounding step: this text is just above the midpoint between 1
+	// and the next float32, so it rounds up; through float64 it would
+	// round down to 1.
+	if err := Unmarshal([]byte("f = 1.0000000596046447753906251\n"), &s); err != nil || s.F != math.Nextafter32(1, 2) {
+		t.Errorf("midpoint text: %v, %v; want %v", s.F, err, math.Nextafter32(1, 2))
+	}
+	type D struct {
+		F float32 `toml:"f,default=3.4028235677973365e38"`
+		G float32 `toml:"g,default=-3.4028235677973366e38"`
+	}
+	var d D
+	if err := UnmarshalWithOptions([]byte(""), &d, WithDefaults()); err != nil ||
+		d.F != math.MaxFloat32 || d.G != -math.MaxFloat32 {
+		t.Errorf("defaults below the rounding point: %+v, %v", d, err)
+	}
+	type O struct {
+		F float32 `toml:"f,default=3.4028236e38"`
+	}
+	var o O
+	if err := UnmarshalWithOptions([]byte(""), &o, WithDefaults()); err == nil {
+		t.Errorf("default above the rounding point: got %v, want an error", o.F)
 	}
 }
 

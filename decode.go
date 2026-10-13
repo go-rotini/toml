@@ -590,13 +590,16 @@ func parseInteger(s string) (int64, error) {
 	return strconv.ParseInt(s, base, 64)
 }
 
-// floatOverflows reports whether f, a float64, rounds to an infinity
-// when stored in a float of kind k: a finite float32 overflows at
-// MaxFloat32 plus half its last-place unit, as values from there round
-// up. Values below that, such as the shortest text for MaxFloat32, round
-// to a finite float32.
-func floatOverflows(f float64, k reflect.Kind) bool {
-	return k == reflect.Float32 && !math.IsInf(f, 0) && math.Abs(f) >= math.MaxFloat32+0x1p103
+// float32Value rounds the text s, whose float64 value f is already
+// known, to a float32 in one step, so text that rounds to MaxFloat32
+// decodes and no value is rounded twice. It reports overflow when a
+// finite s rounds to an infinity. An infinite or NaN f is returned as is.
+func float32Value(s string, f float64) (float64, bool) {
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return f, false
+	}
+	f32, err := strconv.ParseFloat(s, 32)
+	return f32, err != nil
 }
 
 func (d *decoder) decodeFloat(s string, rv reflect.Value, pos Position) error {
@@ -607,10 +610,13 @@ func (d *decoder) decodeFloat(s string, rv reflect.Value, pos Position) error {
 	}
 
 	switch rv.Kind() {
-	case reflect.Float32, reflect.Float64:
-		if floatOverflows(f, rv.Kind()) {
+	case reflect.Float32:
+		f32, overflow := float32Value(stripUnderscores(s), f)
+		if overflow {
 			return &OverflowError{Value: s, Type: rv.Type().String(), Pos: pos}
 		}
+		rv.SetFloat(f32)
+	case reflect.Float64:
 		rv.SetFloat(f)
 	case reflect.Interface:
 		rv.Set(reflect.ValueOf(f))
@@ -932,8 +938,11 @@ func (d *decoder) applyDefault(fi fieldInfo, fv reflect.Value) error {
 		if err != nil {
 			return &DefaultError{Field: fi.name, Message: errInvalidFloatDefault.Error()}
 		}
-		if floatOverflows(f, fv.Kind()) {
-			return &DefaultError{Field: fi.name, Message: errDefaultOutOfRange.Error()}
+		if fv.Kind() == reflect.Float32 {
+			var overflow bool
+			if f, overflow = float32Value(fi.defaultValue, f); overflow {
+				return &DefaultError{Field: fi.name, Message: errDefaultOutOfRange.Error()}
+			}
 		}
 		fv.SetFloat(f)
 	default:
