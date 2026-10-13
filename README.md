@@ -6,10 +6,10 @@ This package is used as the default TOML support package for [rotini](https://gi
 
 ## Features
 
-- Full [TOML 1.1.0](https://toml.io/en/v1.1.0) specification support including Unicode bare keys, `\e`/`\xHH` escapes, inline table newlines, and trailing commas
+- Full [TOML 1.1.0](https://toml.io/en/v1.1.0) specification support including `\e`/`\xHH` escapes, inline table newlines, and trailing commas
 - Tested against the official [TOML Test Suite](https://github.com/toml-lang/toml-test) for conformance
 - Generic `UnmarshalTo[T]` API and type-safe custom marshaler/unmarshaler registration
-- Multi-document streaming with `Encoder`/`Decoder`
+- Streaming `Encoder` and `Decoder` over an `io.Writer` or `io.Reader`, one document per stream
 - Struct field tags: `omitempty`, `inline`, `multiline`, `literal`, `commented`, `hex`/`octal`/`binary`, `required`, `default=<value>`
 - Encode options: indent, indent tables, inline tables, multiline arrays, literal strings, table separators, comments
 - Decode options: strict mode, ordered maps, struct validation, local time zone, JSON unmarshaler fallback
@@ -21,8 +21,8 @@ This package is used as the default TOML support package for [rotini](https://gi
 - `FormatError` for human-readable error output with source line and column pointer
 - Context-aware encoding/decoding via `EncodeContext`/`DecodeContext`
 - Local date/time types: `LocalDate`, `LocalTime`, `LocalDateTime`
-- Deferred decoding with `RawValue` and file decoding with `DecodeFile`
-- DoS protection: depth limiting, key count limiting, document size limiting, node count limiting
+- File decoding with `DecodeFile`, and `RawValue` for decoding the text of a single value on demand
+- Safe on hostile input: parsing takes linear time and nesting depth is bounded (100 levels by default when decoding), with optional key count, document size and node count limits
 
 ## Installation
 

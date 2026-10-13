@@ -38,7 +38,6 @@ func TestTokenStringAllKinds(t *testing.T) {
 		{token{kind: tokenComment, value: " a comment"}, "COMMENT( a comment)"},
 		{token{kind: tokenNewline}, "NEWLINE"},
 		{token{kind: tokenEOF}, "EOF"},
-		{token{kind: tokenError, value: "bad"}, "ERROR(bad)"},
 		{token{kind: tokenKind(999)}, "UNKNOWN"},
 	}
 	for _, tt := range tests {

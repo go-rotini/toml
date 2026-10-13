@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -3427,5 +3429,383 @@ func TestUnmarshalerDecodesIntoStructTargets(t *testing.T) {
 	}
 	if v.Self.X != 5 || v.Self.Calls != 1 {
 		t.Errorf("self = %+v", v.Self)
+	}
+}
+
+type regrItem struct {
+	X int `toml:"x"`
+}
+
+func TestDecodeRepeatedArrayTablesIntoMapOfSlices(t *testing.T) {
+	var v struct {
+		M map[string][]regrItem `toml:"m"`
+	}
+	if err := Unmarshal([]byte("[[m.k]]\nx = 1\n[[m.k]]\nx = 2\n"), &v); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if want := []regrItem{{1}, {2}}; !reflect.DeepEqual(v.M["k"], want) {
+		t.Errorf("M[k] = %v, want %v", v.M["k"], want)
+	}
+}
+
+type regrBase struct {
+	X int `toml:"x"`
+}
+
+type regrPtrEmbed struct {
+	*regrBase
+	Y int `toml:"y"`
+}
+
+type RegrExported struct {
+	X int `toml:"x"`
+}
+
+type regrExportedPtrEmbed struct {
+	*RegrExported
+	Y int `toml:"y"`
+}
+
+type regrInt int
+
+type regrUnexportedEmbed struct {
+	regrInt
+	Z int `toml:"z"`
+}
+
+func TestDecodeEmbeddedPointers(t *testing.T) {
+	var e regrExportedPtrEmbed
+	if err := Unmarshal([]byte("x = 1\ny = 2\n"), &e); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if e.RegrExported == nil || e.X != 1 || e.Y != 2 {
+		t.Errorf("got %+v (embedded %+v)", e, e.RegrExported)
+	}
+
+	var u regrPtrEmbed
+	if err := Unmarshal([]byte("x = 1\ny = 2\n"), &u); !errors.Is(err, ErrType) {
+		t.Errorf("unexported embedded pointer: err = %v, want TypeError", err)
+	}
+	if u.Y != 2 {
+		t.Errorf("Y = %d, want 2", u.Y)
+	}
+
+	var n regrUnexportedEmbed
+	if err := UnmarshalWithOptions([]byte("regrint = 1\nz = 2\n"), &n, WithStrict()); !errors.Is(err, ErrUnknownField) {
+		t.Errorf("unexported embedded non-struct: err = %v, want UnknownFieldError", err)
+	}
+
+	for _, v := range []any{regrPtrEmbed{Y: 2}, regrExportedPtrEmbed{Y: 2}, regrUnexportedEmbed{regrInt: 3, Z: 2}} {
+		out, err := Marshal(v)
+		if err != nil {
+			t.Errorf("Marshal(%T): %v", v, err)
+			continue
+		}
+		if strings.Contains(string(out), "x =") || strings.Contains(string(out), "regrint") {
+			t.Errorf("Marshal(%T) = %q, want no fields behind nil or unexported embeddings", v, out)
+		}
+	}
+}
+
+func TestDecodeCaseInsensitiveRequiredAndDefault(t *testing.T) {
+	var s struct {
+		Name string `toml:"name,required"`
+		Port int    `toml:"port,default=80"`
+	}
+	if err := UnmarshalWithOptions([]byte("NAME = \"x\"\nPort = 9000\n"), &s, WithDefaults()); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if s.Name != "x" || s.Port != 9000 {
+		t.Errorf("got %+v, want name x and port 9000", s)
+	}
+}
+
+func TestDecodeAbsentTableRequiredAndDefault(t *testing.T) {
+	type server struct {
+		Host string `toml:"host,required"`
+		Port int    `toml:"port,default=8080"`
+	}
+	var a struct {
+		Title  string `toml:"title"`
+		Server server `toml:"server"`
+	}
+	err := UnmarshalWithOptions([]byte("title = 'x'\n"), &a, WithDefaults())
+	var syn *SyntaxError
+	if !errors.As(err, &syn) || !strings.Contains(syn.Message, `"server.host"`) {
+		t.Errorf("err = %v, want missing server.host", err)
+	}
+
+	var b struct {
+		Server struct {
+			Port int `toml:"port,default=8080"`
+			TLS  struct {
+				Min string `toml:"min,default=1.2"`
+			} `toml:"tls"`
+		} `toml:"server"`
+		Opt *server `toml:"opt"`
+	}
+	if err := UnmarshalWithOptions([]byte("title = 'x'\n"), &b, WithDefaults()); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if b.Server.Port != 8080 || b.Server.TLS.Min != "1.2" || b.Opt != nil {
+		t.Errorf("got %+v, want defaults applied and nil pointer left alone", b)
+	}
+}
+
+func TestDecodeOrderedMapArrayTables(t *testing.T) {
+	var v any
+	err := UnmarshalWithOptions([]byte("title = 't'\n[[srv]]\nname = 'a'\n[[srv]]\nname = 'b'\n[x]\nk = 1\n"), &v, WithOrderedMap())
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	want := MapSlice{
+		{Key: "title", Value: "t"},
+		{Key: "srv", Value: []any{MapSlice{{Key: "name", Value: "a"}}, MapSlice{{Key: "name", Value: "b"}}}},
+		{Key: "x", Value: MapSlice{{Key: "k", Value: int64(1)}}},
+	}
+	if !reflect.DeepEqual(v, want) {
+		t.Errorf("got %#v\nwant %#v", v, want)
+	}
+
+	if err := UnmarshalWithOptions([]byte("a = 1\nb = 2\n"), &v, WithOrderedMap(), WithMaxKeys(1)); !errors.Is(err, ErrSyntax) {
+		t.Errorf("WithMaxKeys under WithOrderedMap: err = %v, want SyntaxError", err)
+	}
+}
+
+type regrIntKey int
+
+func (k *regrIntKey) UnmarshalText(b []byte) error {
+	n, err := strconv.Atoi(string(b))
+	*k = regrIntKey(n)
+	return err
+}
+
+type regrStrKey string
+
+func (k *regrStrKey) UnmarshalText(b []byte) error {
+	*k = regrStrKey("k:" + string(b))
+	return nil
+}
+
+func TestDecodeTextUnmarshalerMapKeys(t *testing.T) {
+	for _, doc := range []string{"[1]\nx = 1\n[2]\nx = 2\n", "1.x = 1\n2.x = 2\n", "[[1]]\nx = 1\n[[2]]\nx = 2\n"} {
+		var m map[regrIntKey]any
+		if err := Unmarshal([]byte(doc), &m); err != nil {
+			t.Fatalf("%q: %v", doc, err)
+		}
+		if len(m) != 2 || m[1] == nil || m[2] == nil {
+			t.Errorf("%q: got %v, want keys 1 and 2", doc, m)
+		}
+	}
+	var s map[regrStrKey]int
+	if err := Unmarshal([]byte("a = 1\n"), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s["k:a"] != 1 {
+		t.Errorf("got %v, want key k:a", s)
+	}
+}
+
+func TestDecodeArrayTablesLikeArrays(t *testing.T) {
+	var a struct {
+		Items any `toml:"items"`
+	}
+	if err := Unmarshal([]byte("[[items]]\nn = 1\n[[items]]\nn = 2\n"), &a); err != nil {
+		t.Fatalf("into any: %v", err)
+	}
+	if want := []any{map[string]any{"n": int64(1)}, map[string]any{"n": int64(2)}}; !reflect.DeepEqual(a.Items, want) {
+		t.Errorf("into any: got %#v", a.Items)
+	}
+
+	for _, doc := range []string{"[[items]]\nx = 1\n", "items = [{x = 1}]\n"} {
+		b := struct {
+			Items []regrItem `toml:"items"`
+		}{Items: []regrItem{{9}}}
+		if err := Unmarshal([]byte(doc), &b); err != nil {
+			t.Fatalf("%q: %v", doc, err)
+		}
+		if want := []regrItem{{1}}; !reflect.DeepEqual(b.Items, want) {
+			t.Errorf("%q into a pre-filled slice: got %v, want %v", doc, b.Items, want)
+		}
+	}
+
+	var c struct {
+		Items [2]regrItem `toml:"items"`
+	}
+	if err := Unmarshal([]byte("[[items]]\nx = 1\n[[items]]\nx = 2\n"), &c); err != nil {
+		t.Fatalf("into array: %v", err)
+	}
+	if c.Items != [2]regrItem{{1}, {2}} {
+		t.Errorf("into array: got %v", c.Items)
+	}
+	if err := Unmarshal([]byte("[[items]]\nx = 1\n"), &c); !errors.Is(err, ErrType) {
+		t.Errorf("into array of another length: err = %v, want TypeError", err)
+	}
+}
+
+func TestDecodeIntoNonEmptyInterface(t *testing.T) {
+	for _, doc := range []string{"x = 'a'\n", "x = 1\n", "x = [1]\n", "x = {a = 1}\n", "[x]\n", "[[x]]\n"} {
+		var v struct {
+			X fmt.Stringer `toml:"x"`
+		}
+		if err := Unmarshal([]byte(doc), &v); !errors.Is(err, ErrType) {
+			t.Errorf("%q: err = %v, want TypeError", doc, err)
+		}
+	}
+	var d struct {
+		X fmt.Stringer `toml:"x"`
+	}
+	if err := Unmarshal([]byte("x = 2024-01-02\n"), &d); err != nil || d.X.String() != "2024-01-02" {
+		t.Errorf("local date into fmt.Stringer: %v, %v", d.X, err)
+	}
+}
+
+func TestValidRejectsOutOfRangeValues(t *testing.T) {
+	invalid := []string{
+		"a = 99999999999999999999",
+		"a = 9223372036854775808",
+		"a = -9223372036854775809",
+		"a = 0x8000000000000000",
+		"a = 0xFFFFFFFFFFFFFFFF",
+		"a = 0o1777777777777777777777",
+		"a = 0b1" + strings.Repeat("0", 63),
+		"a = 2023-02-30",
+		"a = 2023-02-29",
+		"a = 2023-13-01T00:00:00Z",
+		"a = 2023-00-01",
+		"a = 2023-01-00",
+		"a = 25:00:00",
+		"a = 23:60:00",
+		"a = 23:59:61",
+		"a = 2023-01-01T24:00:00",
+		"a = 20_24-01-01",
+		"a = +2024-01-01",
+		"a = 1_2:00:00",
+		"a = +1:00:00",
+	}
+	for _, doc := range invalid {
+		if Valid([]byte(doc)) {
+			t.Errorf("Valid(%q) = true, want false", doc)
+		}
+		var m map[string]any
+		err := Unmarshal([]byte(doc), &m)
+		var syn *SyntaxError
+		if !errors.As(err, &syn) || syn.Pos.Line != 1 {
+			t.Errorf("Unmarshal(%q): err = %v, want a positioned SyntaxError", doc, err)
+		}
+	}
+	for _, doc := range []string{"a = 2024-02-29", "a = 2000-02-29", "a = 9223372036854775807", "a = -9223372036854775808", "a = 0x7FFFFFFFFFFFFFFF", "a = 23:59:60"} {
+		if !Valid([]byte(doc)) {
+			t.Errorf("Valid(%q) = false, want true", doc)
+		}
+	}
+}
+
+func TestDecodeIntegerAndFloatOverflow(t *testing.T) {
+	var u struct {
+		A uint64 `toml:"a"`
+		B uint   `toml:"b"`
+	}
+	if err := Unmarshal([]byte("a = -1\n"), &u); !errors.Is(err, ErrOverflow) {
+		t.Errorf("-1 into uint64: err = %v, want OverflowError", err)
+	}
+	if err := Unmarshal([]byte("b = -5\n"), &u); !errors.Is(err, ErrOverflow) {
+		t.Errorf("-5 into uint: err = %v, want OverflowError", err)
+	}
+	var f struct {
+		F float32 `toml:"f"`
+	}
+	if err := Unmarshal([]byte("f = 1e300\n"), &f); !errors.Is(err, ErrOverflow) {
+		t.Errorf("1e300 into float32: err = %v, want OverflowError", err)
+	}
+	if err := Unmarshal([]byte("f = inf\n"), &f); err != nil || !math.IsInf(float64(f.F), 1) {
+		t.Errorf("inf into float32: %v, %v", f.F, err)
+	}
+	var m map[string]any
+	if err := Unmarshal([]byte("a = 0x7FFFFFFFFFFFFFFF\n"), &m); err != nil || m["a"] != int64(math.MaxInt64) {
+		t.Errorf("max hex into any: %v, %v", m["a"], err)
+	}
+}
+
+func TestDecodeLeapSecond(t *testing.T) {
+	var v struct {
+		T  time.Time     `toml:"t"`
+		L  LocalTime     `toml:"l"`
+		LD LocalDateTime `toml:"ld"`
+		LT time.Time     `toml:"lt"`
+		A  any           `toml:"a"`
+	}
+	doc := "t = 1979-05-27T23:59:60Z\nl = 23:59:60\nld = 1979-05-27T23:59:60\nlt = 1979-05-27 23:59:60\na = 1979-05-27T23:59:60Z\n"
+	if err := UnmarshalWithOptions([]byte(doc), &v, WithLocalTimeZone(time.UTC)); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	next := time.Date(1979, 5, 28, 0, 0, 0, 0, time.UTC)
+	if !v.T.Equal(next) || !v.LT.Equal(next) || !v.A.(time.Time).Equal(next) {
+		t.Errorf("times = %v, %v, %v, want %v", v.T, v.LT, v.A, next)
+	}
+	if v.L.Second != 60 || v.L.String() != "23:59:60" || v.LD.String() != "1979-05-27T23:59:60" {
+		t.Errorf("local values = %v, %v", v.L, v.LD)
+	}
+}
+
+type regrCivilDate struct{ text string }
+
+func (d *regrCivilDate) UnmarshalText(b []byte) error {
+	d.text = "civil:" + string(b)
+	return nil
+}
+
+func TestDecodeDatesIntoTextUnmarshaler(t *testing.T) {
+	var v struct {
+		D  regrCivilDate `toml:"d"`
+		DT regrCivilDate `toml:"dt"`
+		T  regrCivilDate `toml:"t"`
+		LD LocalDate     `toml:"ld"`
+	}
+	if err := Unmarshal([]byte("d = 2024-01-02\ndt = 2024-01-02T00:00:00Z\nt = 07:00:00\nld = 2024-01-02\n"), &v); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if v.D.text != "civil:2024-01-02" || v.DT.text != "civil:2024-01-02T00:00:00Z" || v.T.text != "civil:07:00:00" || v.LD.Day != 2 {
+		t.Errorf("got %+v", v)
+	}
+}
+
+func TestDecodeDefaultOutOfRange(t *testing.T) {
+	type I struct {
+		V int8 `toml:"v,default=300"`
+	}
+	type U struct {
+		V uint8 `toml:"v,default=256"`
+	}
+	type F struct {
+		V float32 `toml:"v,default=1e300"`
+	}
+	type OK struct {
+		I int8    `toml:"i,default=-128"`
+		U uint8   `toml:"u,default=255"`
+		F float32 `toml:"f,default=1.5"`
+	}
+	for _, v := range []any{&I{}, &U{}, &F{}} {
+		err := UnmarshalWithOptions([]byte(""), v, WithDefaults())
+		var de *DefaultError
+		if !errors.As(err, &de) || !strings.Contains(err.Error(), "out of range") {
+			t.Errorf("%T: err = %v, want an out-of-range DefaultError", v, err)
+		}
+	}
+	var ok OK
+	if err := UnmarshalWithOptions([]byte(""), &ok, WithDefaults()); err != nil || ok != (OK{-128, 255, 1.5}) {
+		t.Errorf("in-range defaults: %+v, %v", ok, err)
+	}
+}
+
+func TestDecodeInvalidMapKeyIsTypeError(t *testing.T) {
+	var m map[time.Time]int
+	err := Unmarshal([]byte("\"2024-01-01T00:00:00Z\" = 1\nbad = 2\n"), &m)
+	var te *TypeError
+	if !errors.As(err, &te) || !strings.Contains(err.Error(), `line 2: key "bad": invalid map key`) {
+		t.Fatalf("err = %v, want a TypeError for key bad on line 2", err)
+	}
+	if len(m) != 1 {
+		t.Errorf("map = %v, want the valid key decoded", m)
 	}
 }

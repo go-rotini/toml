@@ -1096,3 +1096,24 @@ func TestPathIndexAddressesArrayElements(t *testing.T) {
 		t.Errorf("arr = %v", arr.Children)
 	}
 }
+
+func TestPathStringQuotedKey(t *testing.T) {
+	f, err := Parse([]byte("\"a.b\" = 1\n[\"x[y]\"]\nz = 2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for expr, want := range map[string]string{`$['a.b']`: "1", `$["x[y]"].z`: "2", `$["x[y]"]['z']`: "2"} {
+		p, err := PathString(expr)
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if got, err := p.ReadString(f.Root); err != nil || got != want {
+			t.Errorf("%s = %q, %v; want %q", expr, got, err, want)
+		}
+	}
+	for _, expr := range []string{`$['a`, `$['a'`, `$['a'x`} {
+		if _, err := PathString(expr); !errors.Is(err, ErrPathSyntax) {
+			t.Errorf("%s: err = %v, want ErrPathSyntax", expr, err)
+		}
+	}
+}

@@ -3,8 +3,7 @@ package toml
 type tokenKind int32
 
 const (
-	tokenError tokenKind = iota
-	tokenStreamStart
+	tokenStreamStart tokenKind = iota
 	tokenStreamEnd
 	tokenKeyValueSep
 	tokenTableStart
@@ -35,10 +34,17 @@ const (
 )
 
 type token struct {
-	kind  tokenKind
-	start int32 // offset in the normalized source where the token begins
-	value string
-	pos   Position // where the token ends; where it begins for a newline and for = . , { } and a value's [ ]
+	kind      tokenKind
+	start     int32 // offset in the normalized source where the token begins
+	startLine int32 // line and column where the token begins
+	startCol  int32
+	value     string
+	pos       Position // where the token ends; where it begins for a newline and for = . , { } and a value's [ ]
+}
+
+// startPos returns the position where the token begins, which errors report.
+func (t token) startPos() Position {
+	return Position{Line: int(t.startLine), Column: int(t.startCol), Offset: int(t.start)}
 }
 
 func (t token) String() string {
@@ -99,9 +105,43 @@ func (t token) String() string {
 		return "NEWLINE"
 	case tokenEOF:
 		return "EOF"
-	case tokenError:
-		return "ERROR(" + t.value + ")"
 	default:
 		return "UNKNOWN"
+	}
+}
+
+// describe names the token for an error message.
+func (t token) describe() string {
+	switch t.kind {
+	case tokenNewline:
+		return "end of line"
+	case tokenEOF, tokenStreamEnd:
+		return "end of input"
+	case tokenComment:
+		return "comment"
+	case tokenKeyValueSep:
+		return "'='"
+	case tokenTableStart, tokenArrayStart:
+		return "'['"
+	case tokenTableEnd, tokenArrayEnd:
+		return "']'"
+	case tokenArrayTableStart:
+		return "'[['"
+	case tokenArrayTableEnd:
+		return "']]'"
+	case tokenInlineTableStart:
+		return "'{'"
+	case tokenInlineTableEnd:
+		return "'}'"
+	case tokenComma:
+		return "','"
+	case tokenDot:
+		return "'.'"
+	case tokenBareKey:
+		return "key " + t.value
+	case tokenBasicString, tokenMultiLineBasicString, tokenLiteralString, tokenMultiLineLiteralString:
+		return "string"
+	default:
+		return "value " + t.value
 	}
 }

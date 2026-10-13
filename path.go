@@ -78,6 +78,8 @@ func (s recursiveSegment) match(n *Node) []*Node {
 //   - [n] — the child at index n; a negative n counts from the end
 //   - .* — all children
 //   - $..key — nodes at any depth whose key is key
+//   - ['key'] or ["key"] — children whose key is key, which may hold any
+//     character but the quote, such as "." or "["
 //
 // A key matches a [KeyValueNode], whose only child is its value. Indexing a
 // pair whose value is an array selects the array's elements, so $.arr[0] is
@@ -129,6 +131,14 @@ func PathString(expr string) (*Path, error) {
 				rest = rest[end:]
 			}
 		case '[':
+			if key, after, ok, err := quotedKey(rest); ok {
+				if err != nil {
+					return nil, err
+				}
+				p.segments = append(p.segments, keySegment{key: key})
+				rest = after
+				continue
+			}
 			end := strings.IndexByte(rest, ']')
 			if end < 0 {
 				return nil, fmt.Errorf("%w: unclosed [", ErrPathSyntax)
@@ -377,4 +387,17 @@ func indexOfAny(s, chars string) int {
 		}
 	}
 	return -1
+}
+
+// quotedKey reads a ['key'] or ["key"] segment at the start of s. It reports
+// whether s starts one, and returns the key and the rest of s.
+func quotedKey(s string) (key, rest string, ok bool, err error) {
+	if len(s) < 2 || (s[1] != '\'' && s[1] != '"') {
+		return "", s, false, nil
+	}
+	end := strings.IndexByte(s[2:], s[1])
+	if end < 0 || 2+end+1 >= len(s) || s[2+end+1] != ']' {
+		return "", s, true, fmt.Errorf("%w: unclosed quoted key", ErrPathSyntax)
+	}
+	return s[2 : 2+end], s[2+end+2:], true, nil
 }

@@ -2,6 +2,7 @@ package toml
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -651,5 +652,105 @@ func TestUnmarshalDecodeFileEmpty(t *testing.T) {
 	var m map[string]any
 	if err := DecodeFile(path, &m); err != nil {
 		t.Fatalf("DecodeFile empty: %v", err)
+	}
+}
+
+func TestDecoderStopsReadingAtSizeLimit(t *testing.T) {
+	r := strings.NewReader("a = 1\n" + strings.Repeat("#", 1<<20))
+	err := NewDecoder(r, WithMaxDocumentSize(10)).Decode(&map[string]any{})
+	if !errors.Is(err, ErrDocumentSize) {
+		t.Fatalf("err = %v, want ErrDocumentSize", err)
+	}
+	if r.Len() < 1<<20-100 {
+		t.Errorf("decoder read %d bytes past a 10-byte limit", (1<<20+6)-r.Len())
+	}
+}
+
+type aotItem struct {
+	N   int              `json:"n"   toml:"n"`
+	Sub map[string]any   `json:"sub" toml:"sub"`
+	L   []map[string]any `json:"l"   toml:"l"`
+}
+
+type aotBytesHook []aotItem
+
+func (h *aotBytesHook) UnmarshalTOML(data []byte) error {
+	var v struct {
+		S []aotItem `toml:"s"`
+	}
+	if err := Unmarshal(append([]byte("s = "), data...), &v); err != nil {
+		return err
+	}
+	*h = append(aotBytesHook{{N: -1}}, v.S...)
+	return nil
+}
+
+type aotValueHook []aotItem
+
+func (h *aotValueHook) UnmarshalTOML(decode func(any) error) error {
+	var raw []aotItem
+	if err := decode(&raw); err != nil {
+		return err
+	}
+	*h = append(aotValueHook{{N: -2}}, raw...)
+	return nil
+}
+
+type aotJSONHook []aotItem
+
+func (h *aotJSONHook) UnmarshalJSON(data []byte) error {
+	var raw []aotItem
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*h = append(aotJSONHook{{N: -3}}, raw...)
+	return nil
+}
+
+func TestSliceHooksRunForArrayOfTables(t *testing.T) {
+	const aot = "[[s]]\nn = 1\n[s.sub]\nk = \"v\"\n[[s.l]]\nx = 1\n[[s]]\nn = 2\n"
+	const inline = "s = [{n = 1, sub = {k = \"v\"}, l = [{x = 1}]}, {n = 2}]\n"
+	for _, doc := range []string{aot, inline} {
+		var b struct {
+			S aotBytesHook `toml:"s"`
+		}
+		if err := Unmarshal([]byte(doc), &b); err != nil || len(b.S) != 3 || b.S[0].N != -1 || b.S[1].N != 1 ||
+			b.S[1].Sub["k"] != "v" || len(b.S[1].L) != 1 || b.S[2].N != 2 {
+			t.Errorf("BytesUnmarshaler %q: %+v, %v", doc, b.S, err)
+		}
+		var v struct {
+			S *aotValueHook `toml:"s"`
+		}
+		if err := Unmarshal([]byte(doc), &v); err != nil || v.S == nil || len(*v.S) != 3 || (*v.S)[0].N != -2 || (*v.S)[2].N != 2 {
+			t.Errorf("Unmarshaler %q: %+v, %v", doc, v.S, err)
+		}
+		var j struct {
+			S aotJSONHook `toml:"s"`
+		}
+		if err := UnmarshalWithOptions([]byte(doc), &j, WithJSONUnmarshaler()); err != nil || len(j.S) != 3 || j.S[0].N != -3 || j.S[1].Sub["k"] != "v" {
+			t.Errorf("json.Unmarshaler %q: %+v, %v", doc, j.S, err)
+		}
+		var c struct {
+			S []aotItem `toml:"s"`
+		}
+		var got []byte
+		opt := WithCustomUnmarshaler(func(s *[]aotItem, data []byte) error {
+			got = data
+			*s = []aotItem{{N: -4}}
+			return nil
+		})
+		if err := UnmarshalWithOptions([]byte(doc), &c, opt); err != nil || len(c.S) != 1 || c.S[0].N != -4 {
+			t.Errorf("custom unmarshaler %q: %+v, %v", doc, c.S, err)
+		}
+		var back struct {
+			S []aotItem `toml:"s"`
+		}
+		if err := Unmarshal(append([]byte("s = "), got...), &back); err != nil || len(back.S) != 2 || back.S[0].Sub["k"] != "v" {
+			t.Errorf("custom unmarshaler %q: bytes %q do not decode back: %+v, %v", doc, got, back.S, err)
+		}
+	}
+	m := map[string]aotBytesHook{}
+	if err := Unmarshal([]byte("[[s]]\nn = 5\n"), &m); err != nil || len(m["s"]) != 2 || m["s"][0].N != -1 {
+		t.Errorf("map value hook: %+v, %v", m, err)
 	}
 }

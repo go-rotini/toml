@@ -324,8 +324,8 @@ func TestSpanKeepsErrorPositions(t *testing.T) {
 	if !errors.As(err, &dup) {
 		t.Fatalf("err = %v, want DuplicateKeyError", err)
 	}
-	if dup.Pos.Line != 2 || dup.Pos.Column != 2 {
-		t.Errorf("Pos = %v, want 2:2 (unchanged token-end position)", dup.Pos)
+	if dup.Pos.Line != 2 || dup.Pos.Column != 1 || dup.Pos.Offset != 6 {
+		t.Errorf("Pos = %+v, want 2:1 at offset 6, where the key begins", dup.Pos)
 	}
 }
 
@@ -415,5 +415,26 @@ func TestSpanTestSuite(t *testing.T) {
 			checkSpans(t, data, f.Root)
 			checkLineCol(t, data, f.Root)
 		})
+	}
+}
+
+func TestSpanColumnsAcrossRuneChunks(t *testing.T) {
+	for _, size := range []int{runeChunk - 1, runeChunk, runeChunk + 1, 2 * runeChunk, 4 * runeChunk} {
+		for _, prefix := range []string{"", "é"} {
+			// s = "é…x", total size bytes, no trailing newline.
+			body := strings.Repeat("x", size-len(`s = ""`)-len(prefix))
+			doc := `s = "` + prefix + body + `"`
+			f, err := Parse([]byte(doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := f.Root.Children[0].Children[0]
+			if want := utf8.RuneCountInString(doc) + 1; v.Span.End.Column != want || v.Span.End.Offset != len(doc) {
+				t.Errorf("size %d prefix %q: End = %+v, want column %d offset %d", size, prefix, v.Span.End, want, len(doc))
+			}
+			if mid := v.Span.Start.Column; mid != 5 {
+				t.Errorf("size %d prefix %q: Start column = %d, want 5", size, prefix, mid)
+			}
+		}
 	}
 }

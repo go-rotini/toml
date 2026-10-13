@@ -26,18 +26,7 @@ func UnmarshalWithOptions(data []byte, v any, opts ...DecodeOption) error {
 		return ErrDocumentSize
 	}
 
-	s, err := newScanner(data)
-	if err != nil {
-		return err
-	}
-	tokens, err := s.scan()
-	if err != nil {
-		return err
-	}
-
-	p := newParser(tokens)
-	p.maxNodes = o.maxNodes
-	root, err := p.parse()
+	s, root, err := parseDocument(data, o.maxNodes, o.maxDepth)
 	if err != nil {
 		return err
 	}
@@ -95,7 +84,12 @@ func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 	}
 	dec.done = true
 
-	data, err := io.ReadAll(dec.r)
+	r := dec.r
+	if dec.opts.maxDocumentSize > 0 {
+		// One byte past the limit is enough to tell the input is too long.
+		r = io.LimitReader(r, int64(dec.opts.maxDocumentSize)+1)
+	}
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return fmt.Errorf("toml: %w", err)
 	}
@@ -104,18 +98,7 @@ func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 		return ErrDocumentSize
 	}
 
-	sc, err := newScanner(data)
-	if err != nil {
-		return err
-	}
-	tokens, err := sc.scan()
-	if err != nil {
-		return err
-	}
-
-	p := newParser(tokens)
-	p.maxNodes = dec.opts.maxNodes
-	root, err := p.parse()
+	sc, root, err := parseDocument(data, dec.opts.maxNodes, dec.opts.maxDepth)
 	if err != nil {
 		return err
 	}

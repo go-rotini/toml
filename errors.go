@@ -7,7 +7,12 @@ import (
 	"strings"
 )
 
-// Position identifies a location within TOML source text.
+// Position identifies a location within TOML source text. Line and Column
+// start at 1; Column counts characters (Unicode code points), not bytes.
+// Offset is the 0-based byte offset of the same location, for callers that
+// need a byte position. An error's position is where it was detected, which
+// can be just past the offending text. The zero Position means the location
+// is unknown.
 type Position struct {
 	Line   int
 	Column int
@@ -25,7 +30,7 @@ func (p Position) String() string {
 type SyntaxError struct {
 	Message string
 	Pos     Position
-	Token   string
+	Token   string // the token the parser stopped at, such as "'='" or "end of line"; empty when scanning failed
 }
 
 // Error implements the error interface.
@@ -201,7 +206,9 @@ func (e *ConflictError) Is(target error) bool {
 	return ok
 }
 
-// Sentinel errors for use with [errors.Is].
+// Sentinel errors for use with [errors.Is]. Never pass one's address to
+// [errors.As] (as in &ErrSyntax): that overwrites the shared sentinel.
+// Declare a variable of the error type for errors.As instead.
 var (
 	// ErrSyntax indicates malformed TOML input.
 	ErrSyntax = &SyntaxError{}
@@ -242,6 +249,12 @@ var (
 	errInvalidBase64Char      = errors.New("invalid base64 character")
 	errUnsupportedEncodeType  = errors.New("toml: cannot encode as table")
 	errUnsupportedFieldType   = errors.New("toml: unsupported type")
+	errNonFiniteJSON          = errors.New("has no JSON representation")
+	errJSONIntOverflow        = errors.New("overflows a TOML integer (int64)")
+	errUintOverflow           = errors.New("toml: unsigned integer overflows a TOML integer (int64)")
+	errInvalidScalar          = errors.New("toml: invalid scalar value")
+	errNilValue               = errors.New("toml: cannot encode a nil value: TOML has no null")
+	errEncodeCycle            = errors.New("encountered a cycle")
 	errLeadingZeros           = errors.New("leading zeros are not allowed in decimal integers")
 	errInvalidLocalTime       = errors.New("toml: invalid local time")
 	errInvalidLocalDateTime   = errors.New("toml: invalid local date-time")
@@ -251,6 +264,7 @@ var (
 	errInvalidUintDefault     = errors.New("invalid uint default")
 	errInvalidFloatDefault    = errors.New("invalid float default")
 	errUnsupportedDefault     = errors.New("default tag is not supported for type")
+	errDefaultOutOfRange      = errors.New("default out of range for the field type")
 )
 
 // FormatError returns a human-readable string for errors that carry a

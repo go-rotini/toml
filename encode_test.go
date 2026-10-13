@@ -1079,8 +1079,8 @@ func TestEncodePointerFieldNil(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(out), `val = ""`) {
-		t.Errorf("expected nil pointer -> empty string, got:\n%s", out)
+	if strings.Contains(string(out), "val") {
+		t.Errorf("expected nil pointer to be omitted, got:\n%s", out)
 	}
 }
 
@@ -2353,7 +2353,7 @@ func TestEncodeInlineTableInArrayOmitEmpty(t *testing.T) {
 // Coverage: encodeTableField — nil pointer (returns early), comment on table
 // ---------------------------------------------------------------------------
 
-func TestEncodeTableFieldNilPointerRendersEmpty(t *testing.T) {
+func TestEncodeTableFieldNilPointerOmitted(t *testing.T) {
 	type Inner struct {
 		Val int `toml:"val"`
 	}
@@ -2366,9 +2366,8 @@ func TestEncodeTableFieldNilPointerRendersEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(out)
-	// nil pointer struct renders as empty string (isTableValue returns false for nil ptr)
-	if !strings.Contains(got, `inner = ""`) {
-		t.Errorf("nil pointer field should render as empty string, got:\n%s", got)
+	if strings.Contains(got, "inner") {
+		t.Errorf("nil pointer field should be omitted, got:\n%s", got)
 	}
 }
 
@@ -2405,8 +2404,8 @@ func TestEncodeValueNilPointer(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(out)
-	if !strings.Contains(got, `val = ""`) {
-		t.Errorf("nil pointer should encode as empty string, got:\n%s", got)
+	if strings.Contains(got, "val") {
+		t.Errorf("nil pointer should be omitted, got:\n%s", got)
 	}
 }
 
@@ -3706,5 +3705,320 @@ func TestEncodeWithCommentPositions(t *testing.T) {
 	}
 	if _, err := Parse(out); err != nil {
 		t.Errorf("output does not parse: %v", err)
+	}
+}
+
+func TestEncodeMixedArrayStartingWithTable(t *testing.T) {
+	in := map[string]any{"a": []any{map[string]any{"k": "a"}, "b", int64(1)}}
+	out, err := Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var back map[string]any
+	if err := Unmarshal(out, &back); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", out, err)
+	}
+	if !reflect.DeepEqual(back, in) {
+		t.Errorf("round trip: got %v, want %v", back, in)
+	}
+}
+
+func TestEncodeStringsRoundTripExactly(t *testing.T) {
+	values := []string{"a\r\nb", "a\rb", `x"""y`, `"""`, `""`, `"`, `a""`, "a\x01b", "it's", "'''", "\x9a", "tab\there", "\nlead", "end\\", ""}
+	type tags struct {
+		ML  string `toml:"ml,multiline"`
+		MLL string `toml:"mll,multiline,literal"`
+		L   string `toml:"l,literal"`
+	}
+	for _, s := range values {
+		for _, opts := range [][]EncodeOption{nil, {WithLiteralString(true)}, {WithMultiLineString(true)}} {
+			in := tags{ML: s, MLL: s, L: s}
+			out, err := MarshalWithOptions(in, opts...)
+			if err != nil {
+				t.Fatalf("Marshal(%q): %v", s, err)
+			}
+			var back tags
+			if err := Unmarshal(out, &back); err != nil {
+				t.Errorf("Unmarshal of %q: %v\n%s", s, err, out)
+				continue
+			}
+			want := strings.ToValidUTF8(s, "\uFFFD")
+			if want != s && back.L == s {
+				t.Errorf("literal %q written as invalid UTF-8", s)
+			}
+			if back.ML != want || back.MLL != want || back.L != want {
+				t.Errorf("%q: got %q, %q, %q\n%s", s, back.ML, back.MLL, back.L, out)
+			}
+		}
+	}
+}
+
+func TestEncodeNodeStringsRoundTrip(t *testing.T) {
+	docs := []string{
+		"a = \"\"\"x\\ry\"\"\"\n",
+		"a = \"\"\"q\\\"\\\"\\\"q\"\"\"\n",
+		"a = '''x\ny'''\n",
+	}
+	for _, doc := range docs {
+		f, err := Parse([]byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := NodeToBytes(f.Root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want, got map[string]any
+		if err := Unmarshal([]byte(doc), &want); err != nil {
+			t.Fatal(err)
+		}
+		if err := Unmarshal(out, &got); err != nil {
+			t.Errorf("%q re-encoded as %q: %v", doc, out, err)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%q: got %v, want %v", doc, got, want)
+		}
+	}
+
+	root := &Node{Kind: TableNode, Children: []*Node{
+		{Kind: KeyValueNode, Key: []string{"a"}, Children: []*Node{{Kind: StringNode, Style: LiteralStyle, Value: "it's"}}},
+		{Kind: KeyValueNode, Key: []string{"b"}, Children: []*Node{{Kind: StringNode, Style: MultiLineLiteralStyle, Value: "x'''y\r"}}},
+	}}
+	out, err := NodeToBytes(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := Unmarshal(out, &m); err != nil || m["a"] != "it's" || m["b"] != "x'''y\r" {
+		t.Errorf("literal styles that cannot hold their value: %v, %v\n%s", m, err, out)
+	}
+}
+
+func TestEncodeNodeRejectsInvalidScalarText(t *testing.T) {
+	f, err := Parse([]byte("port = 80\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := PathString("$.port")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []*Node{
+		{Kind: IntegerNode, Value: "1\nroot = true"},
+		{Kind: IntegerNode, Value: "1.5"},
+		{Kind: BooleanNode, Value: "yes"},
+		{Kind: LocalDateNode, Value: "2024-01-01T00:00:00"},
+		{Kind: FloatNode, Value: ""},
+		{Kind: IntegerNode, Value: "\xef\xbb\xbf2"},
+		{Kind: IntegerNode, Value: "\xef\xbb\xbf"},
+	} {
+		kv := &Node{Kind: KeyValueNode, Key: []string{"port"}, Children: []*Node{v}}
+		if err := p.Replace(f.Root, kv); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := NodeToBytes(f.Root); err == nil {
+			t.Errorf("value %q: NodeToBytes = %q, want an error", v.Value, out)
+		}
+	}
+	kv := &Node{Kind: KeyValueNode, Key: []string{"port"}, Children: []*Node{{Kind: IntegerNode, Value: "0x1F"}}}
+	if err := p.Replace(f.Root, kv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NodeToBytes(f.Root); err != nil {
+		t.Errorf("valid hex integer rejected: %v", err)
+	}
+}
+
+func TestEncodeNilValuesOmitted(t *testing.T) {
+	var np *int
+	out, err := Marshal(map[string]any{"k": nil, "p": np, "x": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "x = 1\n" {
+		t.Errorf("got %q, want only x", out)
+	}
+	if _, err := Marshal(map[string]any{"a": []any{1, nil}}); err == nil {
+		t.Error("nil inside an array: want an error")
+	}
+	out, err = FromJSON([]byte(`{"a": null, "b": 1}`))
+	if err != nil || string(out) != "b = 1\n" {
+		t.Errorf("FromJSON null: %q, %v", out, err)
+	}
+}
+
+func TestEncodeNegativeBaseTaggedIntegers(t *testing.T) {
+	type H struct {
+		N int `toml:"n,hex"`
+		O int `toml:"o,octal"`
+		B int `toml:"b,binary"`
+		P int `toml:"p,hex"`
+	}
+	out, err := Marshal(H{N: -31, O: -8, B: -2, P: 31})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back H
+	if err := Unmarshal(out, &back); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", out, err)
+	}
+	if back != (H{N: -31, O: -8, B: -2, P: 31}) || !strings.Contains(string(out), "p = 0x1F") {
+		t.Errorf("got %+v from %q", back, out)
+	}
+	if _, err := Marshal(map[string]uint64{"u": math.MaxUint64}); err == nil {
+		t.Error("uint64 above the TOML integer range: want an error")
+	}
+}
+
+func TestEncodeCommentedTableFields(t *testing.T) {
+	type sub struct {
+		A int `toml:"a"`
+	}
+	type cfg struct {
+		Sub  sub   `toml:"sub,commented"`
+		List []sub `toml:"list,commented"`
+		Arr  []int `toml:"arr,commented"`
+	}
+	out, err := MarshalWithOptions(cfg{Sub: sub{1}, List: []sub{{2}}, Arr: []int{1, 2}}, WithArrayMultiline(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back map[string]any
+	if err := Unmarshal(out, &back); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", out, err)
+	}
+	if len(back) != 0 {
+		t.Errorf("commented fields became live keys %v:\n%s", back, out)
+	}
+	if !strings.Contains(string(out), "# sub = { a = 1 }") {
+		t.Errorf("commented table not written as a comment:\n%s", out)
+	}
+}
+
+func TestEncodeCommentsAreValid(t *testing.T) {
+	type cfg struct {
+		A int `toml:"a" comment:"line1\nline2"`
+	}
+	out, err := MarshalWithOptions(cfg{A: 1}, WithComment(map[string][]Comment{
+		"a": {{Position: LineCommentPos, Text: "x\x00y\rz"}, {Position: HeadCommentPos, Text: "bad \xff utf8"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !Valid(out) {
+		t.Errorf("invalid TOML:\n%q", out)
+	}
+	if !strings.Contains(string(out), "# line2\n") {
+		t.Errorf("second comment line not commented:\n%s", out)
+	}
+}
+
+func TestEncodeTimeEdgeCases(t *testing.T) {
+	tm := time.Date(2024, 1, 2, 3, 4, 5, 0, time.FixedZone("lmt", 30))
+	out, err := Marshal(map[string]any{"t": tm})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back map[string]any
+	if err := Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if got := back["t"].(time.Time); !got.Equal(tm) {
+		t.Errorf("got %v, want the instant %v (%s)", got, tm, out)
+	}
+
+	type cfg struct {
+		When time.Time `toml:"when"`
+	}
+	_, err = Marshal(cfg{When: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
+	if err == nil || !strings.HasPrefix(err.Error(), `toml: key "when"`) {
+		t.Errorf("year 10000: err = %v, want it to name the key", err)
+	}
+}
+
+func TestEncodeFloat32ShortestDigits(t *testing.T) {
+	out, err := Marshal(map[string]any{"f": float32(0.1), "g": 0.1, "h": float32(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "f = 0.1\ng = 0.1\nh = 3.0\n"; string(out) != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}
+
+func TestEncodeNodeChecksEveryScalar(t *testing.T) {
+	f, err := Parse([]byte("a = 1979-05-27T07:32:00Z\nb = 2\nc = [1.5, true]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := NodeToBytes(f.Root)
+	if err != nil || string(out) != "a = 1979-05-27T07:32:00Z\nb = 2\nc = [1.5, true]\n" {
+		t.Fatalf("NodeToBytes = %q, %v", out, err)
+	}
+	p, err := PathString("$.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arr := &Node{Kind: ArrayNode, Children: []*Node{{Kind: FloatNode, Value: "1.5"}, {Kind: BooleanNode, Value: "1"}}}
+	kv := &Node{Kind: KeyValueNode, Key: []string{"c"}, Children: []*Node{arr}}
+	if err := p.Replace(f.Root, kv); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := NodeToBytes(f.Root); err == nil {
+		t.Errorf("boolean %q after valid scalars: NodeToBytes = %q, want an error", "1", out)
+	}
+}
+
+type cycleNode struct {
+	V    int
+	Next *cycleNode
+}
+
+func TestEncodeCycle(t *testing.T) {
+	n := &cycleNode{V: 1}
+	n.Next = n
+	m := map[string]any{"x": 1}
+	m["m"] = m
+	arr := []any{1}
+	arr[0] = arr
+	type inline struct {
+		Items []any `toml:"items"`
+	}
+	ring := &cycleNode{V: 1, Next: &cycleNode{V: 2}}
+	ring.Next.Next = ring
+	for name, v := range map[string]any{
+		"struct pointer": n,
+		"ring":           ring,
+		"map":            m,
+		"inline slice":   inline{Items: arr},
+		"array tables":   map[string]any{"a": []map[string]any{m}},
+	} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := Marshal(v)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if !errors.Is(err, errEncodeCycle) {
+				t.Errorf("%s: err = %v, want a cycle error", name, err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%s: Marshal of a cyclic value did not return", name)
+		}
+	}
+
+	// A deep value that is not a cycle still encodes.
+	deep := &cycleNode{}
+	for range cycleDepth + 10 {
+		deep = &cycleNode{V: 1, Next: deep}
+	}
+	if _, err := Marshal(deep); err != nil {
+		t.Errorf("deep acyclic value: %v", err)
+	}
+	shared := map[string]any{"v": 1}
+	if _, err := Marshal(map[string]any{"a": shared, "b": shared}); err != nil {
+		t.Errorf("shared map: %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package toml
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -1811,5 +1812,24 @@ func TestScanTableKeyError(t *testing.T) {
 	_, err = s.scan()
 	if err == nil {
 		t.Error("expected error for trailing dot in table key")
+	}
+}
+
+func TestScanFloatOutOfRange(t *testing.T) {
+	for _, doc := range []string{"x = 1e400\n", "x = -1_7e3_08\n", "x = 1.5e309\n"} {
+		_, err := Parse([]byte(doc))
+		var se *SyntaxError
+		if !errors.As(err, &se) || se.Message != "float out of range" || se.Pos.Line != 1 {
+			t.Errorf("%q: err = %v, want a positioned float out of range SyntaxError", doc, err)
+		}
+		var v any
+		if err := Unmarshal([]byte(doc), &v); !errors.As(err, &se) || strings.Contains(err.Error(), "strconv") {
+			t.Errorf("%q: Unmarshal err = %v, want the SyntaxError", doc, err)
+		}
+	}
+	for _, doc := range []string{"x = 1e-400\n", "x = 1.7976931348623157e308\n"} {
+		if _, err := Parse([]byte(doc)); err != nil {
+			t.Errorf("%q: %v", doc, err)
+		}
 	}
 }

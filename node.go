@@ -45,6 +45,8 @@ type node struct {
 	footComment string
 	span        srcSpan
 	keySpan     srcSpan
+	def         tableDef         // parser bookkeeping: how a table was created
+	index       map[string]*node // parser bookkeeping: children by key, see addChild
 }
 
 // NodeKind identifies the type of a TOML [Node] in the AST.
@@ -144,18 +146,10 @@ type File struct {
 }
 
 // Parse parses data into a [File] whose Root is the document's root table.
+// Tables, inline tables and arrays nested more than 10000 levels deep are
+// rejected with a [SyntaxError].
 func Parse(data []byte) (*File, error) {
-	s, err := newScanner(data)
-	if err != nil {
-		return nil, err
-	}
-	tokens, err := s.scan()
-	if err != nil {
-		return nil, err
-	}
-
-	p := newParser(tokens)
-	root, err := p.parse()
+	s, root, err := parseDocument(data, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +195,12 @@ func Filter(n *Node, fn func(*Node) bool) []*Node {
 // options. The output is regenerated rather than a copy of the source layout,
 // though each node's head, line and foot comments are kept; to edit a parsed
 // document in place, use [Node.Span].
+//
+// A string is written in its node's [StringStyle] when that style can hold
+// it exactly, and as a basic string otherwise. The Value of any other scalar
+// must be one TOML value of the node's kind, such as "0x1F" for an
+// [IntegerNode]; otherwise NodeToBytes returns an error, so text edited into
+// a tree cannot add keys or break the document.
 func NodeToBytes(n *Node) ([]byte, error) {
 	internal := importNode(n)
 	enc := newEncoder(defaultEncodeOptions())

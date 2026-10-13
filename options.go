@@ -187,9 +187,11 @@ func WithJSONUnmarshaler() DecodeOption {
 	return func(o *decoderOptions) { o.useJSONUnmarshaler = true }
 }
 
-// WithMaxDepth limits how deeply tables may nest in the decoded value
-// (default 100; zero means no limit). Deeper tables are rejected with a
-// [SyntaxError].
+// WithMaxDepth limits how deeply tables, inline tables and arrays may nest,
+// counting the root table as 1 (default 100; zero means no limit). Deeper
+// input is rejected with a [SyntaxError] while it is parsed. Whatever the
+// limit, nesting deeper than 10000 levels is always rejected, as it is by
+// [Parse] and [Valid].
 func WithMaxDepth(n int) DecodeOption {
 	return func(o *decoderOptions) { o.maxDepth = n }
 }

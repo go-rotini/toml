@@ -5,36 +5,106 @@ import (
 	"strings"
 )
 
+// maxNestingDepth bounds how deeply tables, inline tables and arrays may nest
+// whatever the options say, so recursion over the tree stays well within the
+// goroutine stack.
+const maxNestingDepth = 10000
+
+// tableDef records how the parser created a table node, which decides how
+// later headers and dotted keys may extend it.
+type tableDef uint8
+
+const (
+	defNone     tableDef = iota // the root, an [[array]] entry, or an inline table written as a value
+	defImplicit                 // a parent of a table named by a header, not yet named itself
+	defDotted                   // created by a dotted key
+	defExplicit                 // named by a [table] header
+)
+
+// indexThreshold is the child count above which a node keeps a map from key
+// to child instead of scanning its children.
+const indexThreshold = 8
+
 type parser struct {
 	tokens         []token
 	pos            int
 	root           *node
 	current        *node
-	currentPath    string
-	implicit       map[string]bool
-	defined        map[string]bool
-	inline         map[string]bool
-	arrayDefined   map[string]bool
-	staticArrays   map[string]bool
-	dottedImplicit map[string]bool
-	explicitTables map[string]bool
+	currentDepth   int // nesting depth of current: 1 for the root, one more per header segment
 	commentBreak   int // pendingComment[:commentBreak] ends before a blank line
 	maxNodes       int
+	maxDepth       int
 	nodeCount      int
 	pendingComment []string
 }
 
 func newParser(tokens []token) *parser {
-	return &parser{
-		tokens:         tokens,
-		implicit:       make(map[string]bool),
-		defined:        make(map[string]bool),
-		inline:         make(map[string]bool),
-		arrayDefined:   make(map[string]bool),
-		staticArrays:   make(map[string]bool),
-		dottedImplicit: make(map[string]bool),
-		explicitTables: make(map[string]bool),
+	return &parser{tokens: tokens, maxDepth: maxNestingDepth}
+}
+
+// parseDocument scans and parses data. maxNodes and maxDepth are the
+// [WithMaxNodes] and [WithMaxDepth] limits (zero for none).
+func parseDocument(data []byte, maxNodes, maxDepth int) (*scanner, *node, error) {
+	s, err := newScanner(data)
+	if err != nil {
+		return nil, nil, err
 	}
+	tokens, err := s.scan()
+	if err != nil {
+		return nil, nil, err
+	}
+	p := newParser(tokens)
+	p.maxNodes = maxNodes
+	if maxDepth > 0 && maxDepth < p.maxDepth {
+		p.maxDepth = maxDepth
+	}
+	root, err := p.parse()
+	if err != nil {
+		return nil, nil, err
+	}
+	return s, root, nil
+}
+
+// lookup returns n's child with the given key: a key/value pair, a table,
+// or the last entry of an array of tables.
+func (n *node) lookup(key string) *node {
+	if n.index != nil {
+		return n.index[key]
+	}
+	var found *node
+	for _, child := range n.children {
+		if len(child.key) > 0 && child.key[0] == key {
+			if child.kind != nodeArrayTable {
+				return child
+			}
+			found = child
+		}
+	}
+	return found
+}
+
+// addChild appends a keyed child, keeping the lookup index current.
+func (n *node) addChild(child *node) {
+	n.children = append(n.children, child)
+	switch {
+	case n.index != nil:
+		n.index[child.key[0]] = child
+	case len(n.children) > indexThreshold:
+		n.index = make(map[string]*node, 2*len(n.children))
+		for _, c := range n.children {
+			if len(c.key) > 0 {
+				n.index[c.key[0]] = c
+			}
+		}
+	}
+}
+
+// pairValue returns the value of a key/value pair node.
+func pairValue(kv *node) *node {
+	if len(kv.children) == 0 {
+		return &node{}
+	}
+	return kv.children[0]
 }
 
 func (p *parser) checkNodeLimit() error {
@@ -45,9 +115,19 @@ func (p *parser) checkNodeLimit() error {
 	return nil
 }
 
+// checkDepth reports an error when a table, inline table or array would
+// nest depth levels deep, past the limit.
+func (p *parser) checkDepth(depth int, at token) error {
+	if depth > p.maxDepth {
+		return &SyntaxError{Message: "maximum nesting depth exceeded", Pos: at.startPos()}
+	}
+	return nil
+}
+
 func (p *parser) parse() (*node, error) {
 	p.root = &node{kind: nodeTable}
 	p.current = p.root
+	p.currentDepth = 1
 
 	for p.pos < len(p.tokens) {
 		tok := p.peek()
@@ -76,7 +156,7 @@ func (p *parser) parse() (*node, error) {
 		case tokenEOF:
 			p.advance()
 		default:
-			return nil, p.syntaxError(fmt.Sprintf("unexpected token %s", tok))
+			return nil, p.syntaxError(fmt.Sprintf("unexpected %s", tok.describe()))
 		}
 	}
 
@@ -131,61 +211,99 @@ func (p *parser) parseComment() {
 	p.advance()
 }
 
-func (p *parser) parseTable() error {
-	p.consumeFootComment()
-	headComment := p.consumeHeadComment()
-
-	open := p.peek()
-	p.advance() // consume TableStart
-	keys, err := p.parseKeyPath()
+// parseHeader reads a [table] or [[array]] header up to and including its
+// line comment, and checks that nothing else follows it on the line.
+func (p *parser) parseHeader(end tokenKind, what string) (keys []token, open, closing token, lineComment string, err error) {
+	open = p.peek()
+	p.advance() // consume [ or [[
+	keys, err = p.parseKeyPath()
 	if err != nil {
-		return err
+		return nil, open, closing, "", err
 	}
-	closing := p.peek()
-	if !p.expectToken(tokenTableEnd) {
-		return p.syntaxError("expected ]")
+	closing = p.peek()
+	if !p.expectToken(end) {
+		if end == tokenArrayTableEnd {
+			return nil, open, closing, "", p.syntaxError("expected ]]")
+		}
+		return nil, open, closing, "", p.syntaxError("expected ]")
 	}
 
-	lineComment := p.consumeLineComment()
+	lineComment = p.consumeLineComment()
 
 	if p.pos < len(p.tokens) {
 		next := p.peek()
 		if next.kind != tokenNewline && next.kind != tokenEOF && next.kind != tokenComment && next.kind != tokenStreamEnd {
-			return p.syntaxError("extra content after table header")
+			return nil, open, closing, "", p.syntaxError("extra content after " + what)
 		}
 	}
+	if err := p.checkDepth(len(keys)+1, keys[0]); err != nil {
+		return nil, open, closing, "", err
+	}
+	return keys, open, closing, lineComment, nil
+}
 
-	path := "\x00" + joinKeys(keys)
-	if p.defined[path] {
-		return &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].pos}
-	}
-	if p.inline[path] {
-		return &InlineTableError{Table: displayPath(keys), Pos: keys[0].pos}
-	}
-	if p.arrayDefined[path] {
-		return &ConflictError{Key: displayPath(keys), Message: "cannot define table: already defined as array of tables", Pos: keys[0].pos}
-	}
-	if p.dottedImplicit[path] {
-		return &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].pos}
-	}
-	for i := range keys[:len(keys)-1] {
-		prefix := "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
-		if p.defined[prefix] && !p.implicit[prefix] && !p.explicitTables[prefix] && !p.arrayDefined[prefix] {
-			return &DuplicateKeyError{Key: displayPath(keys[:i+1]), Pos: keys[0].pos}
+// headerParent walks a header's keys but the last from the root, creating
+// missing tables, and returns the table the last key belongs to. An array of
+// tables on the way resolves to its last entry.
+func (p *parser) headerParent(keys []token, arrayHeader bool) (*node, error) {
+	t := p.root
+	for i, k := range keys[:len(keys)-1] {
+		c := t.lookup(k.value)
+		switch {
+		case c == nil:
+			c = &node{kind: nodeTable, key: []string{k.value}, pos: k.pos, def: defImplicit}
+			t.addChild(c)
+		case c.kind == nodeKeyValue:
+			if pairValue(c).kind == nodeInlineTable {
+				return nil, &InlineTableError{Table: displayPath(keys[:i+1]), Pos: keys[0].startPos()}
+			}
+			if arrayHeader {
+				return nil, &ConflictError{Key: displayPath(keys[:i+1]), Message: "cannot use as table: already defined as value", Pos: keys[0].startPos()}
+			}
+			return nil, &DuplicateKeyError{Key: displayPath(keys[:i+1]), Pos: keys[0].startPos()}
 		}
+		t = c
 	}
-	p.defined[path] = true
-	p.explicitTables[path] = true
+	return t, nil
+}
 
-	target := p.ensureTable(keys)
-	delete(p.implicit, path)
-	target.kind = nodeTable
+func (p *parser) parseTable() error {
+	p.consumeFootComment()
+	headComment := p.consumeHeadComment()
+
+	keys, open, closing, lineComment, err := p.parseHeader(tokenTableEnd, "table header")
+	if err != nil {
+		return err
+	}
+	parent, err := p.headerParent(keys, false)
+	if err != nil {
+		return err
+	}
+
+	last := keys[len(keys)-1]
+	target := parent.lookup(last.value)
+	switch {
+	case target == nil:
+		target = &node{kind: nodeTable, key: []string{last.value}, pos: last.pos}
+		parent.addChild(target)
+	case target.kind == nodeKeyValue:
+		if pairValue(target).kind == nodeInlineTable {
+			return &InlineTableError{Table: displayPath(keys), Pos: keys[0].startPos()}
+		}
+		return &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].startPos()}
+	case target.kind == nodeArrayTable:
+		return &ConflictError{Key: displayPath(keys), Message: "cannot define table: already defined as array of tables", Pos: keys[0].startPos()}
+	case target.def != defImplicit:
+		return &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].startPos()}
+	}
+
+	target.def = defExplicit
 	target.headComment = headComment
 	target.comment = lineComment
 	target.span = srcSpan{start: int(open.start), end: closing.pos.Offset}
 	target.keySpan = keyPathSpan(keys)
 	p.current = target
-	p.currentPath = path
+	p.currentDepth = len(keys) + 1
 	return nil
 }
 
@@ -193,77 +311,51 @@ func (p *parser) parseArrayTable() error {
 	p.consumeFootComment()
 	headComment := p.consumeHeadComment()
 
-	open := p.peek()
-	p.advance() // consume ArrayTableStart
-	keys, err := p.parseKeyPath()
+	keys, open, closing, lineComment, err := p.parseHeader(tokenArrayTableEnd, "array table header")
 	if err != nil {
 		return err
 	}
-	closing := p.peek()
-	if !p.expectToken(tokenArrayTableEnd) {
-		return p.syntaxError("expected ]]")
+	parent, err := p.headerParent(keys, true)
+	if err != nil {
+		return err
 	}
 
-	lineComment := p.consumeLineComment()
-
-	if p.pos < len(p.tokens) {
-		next := p.peek()
-		if next.kind != tokenNewline && next.kind != tokenEOF && next.kind != tokenComment && next.kind != tokenStreamEnd {
-			return p.syntaxError("extra content after array table header")
+	last := keys[len(keys)-1]
+	if existing := parent.lookup(last.value); existing != nil && existing.kind != nodeArrayTable {
+		conflict := func(msg string) error {
+			return &ConflictError{Key: displayPath(keys), Message: msg, Pos: keys[0].startPos()}
+		}
+		switch {
+		case existing.kind == nodeKeyValue:
+			switch pairValue(existing).kind {
+			case nodeInlineTable:
+				return &InlineTableError{Table: displayPath(keys), Pos: keys[0].startPos()}
+			case nodeArray:
+				return conflict("cannot extend static array with array of tables")
+			default:
+				return conflict("cannot define array of tables: already defined as value")
+			}
+		case existing.def == defDotted:
+			return conflict("cannot define array of tables: key already defined via dotted keys")
+		case existing.def == defImplicit:
+			return conflict("cannot define array of tables: already implicitly defined as table")
+		default:
+			return conflict("cannot define array of tables: already defined as table")
 		}
 	}
 
-	path := "\x00" + joinKeys(keys)
-	if p.inline[path] {
-		return &InlineTableError{Table: displayPath(keys), Pos: keys[0].pos}
-	}
-	if p.defined[path] && !p.implicit[path] && !p.arrayDefined[path] {
-		return &ConflictError{Key: displayPath(keys), Message: "cannot define array of tables: already defined as table", Pos: keys[0].pos}
-	}
-	if p.staticArrays[path] {
-		return &ConflictError{Key: displayPath(keys), Message: "cannot extend static array with array of tables", Pos: keys[0].pos}
-	}
-	if p.dottedImplicit[path] {
-		return &ConflictError{Key: displayPath(keys), Message: "cannot define array of tables: key already defined via dotted keys", Pos: keys[0].pos}
-	}
-	if p.implicit[path] && !p.arrayDefined[path] {
-		return &ConflictError{Key: displayPath(keys), Message: "cannot define array of tables: already implicitly defined as table", Pos: keys[0].pos}
-	}
-	for i := range keys[:len(keys)-1] {
-		prefix := "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
-		if p.defined[prefix] && !p.implicit[prefix] && !p.explicitTables[prefix] && !p.arrayDefined[prefix] {
-			return &ConflictError{Key: displayPath(keys[:i+1]), Message: "cannot use as table: already defined as value", Pos: keys[0].pos}
-		}
-	}
-	p.arrayDefined[path] = true
-
-	// Each [[array]] entry starts with a clean namespace.
-	clearPrefix := path + "\x00"
-	for k := range p.defined {
-		if strings.HasPrefix(k, clearPrefix) {
-			delete(p.defined, k)
-		}
-	}
-	for k := range p.dottedImplicit {
-		if strings.HasPrefix(k, clearPrefix) {
-			delete(p.dottedImplicit, k)
-		}
-	}
-
-	parent := p.ensureTable(keys[:len(keys)-1])
-	lastKey := keys[len(keys)-1].value
 	entry := &node{
 		kind:        nodeArrayTable,
-		key:         []string{lastKey},
+		key:         []string{last.value},
 		pos:         keys[0].pos,
 		headComment: headComment,
 		comment:     lineComment,
 		span:        srcSpan{start: int(open.start), end: closing.pos.Offset},
 		keySpan:     keyPathSpan(keys),
 	}
-	parent.children = append(parent.children, entry)
+	parent.addChild(entry)
 	p.current = entry
-	p.currentPath = path
+	p.currentDepth = len(keys) + 1
 	return nil
 }
 
@@ -274,54 +366,43 @@ func (p *parser) parseKeyValue() error {
 	if err != nil {
 		return err
 	}
+	if err := p.checkDepth(p.currentDepth+len(keys)-1, keys[0]); err != nil {
+		return err
+	}
 	if !p.expectToken(tokenKeyValueSep) {
 		return p.syntaxError("expected =")
 	}
 
-	value, err := p.parseValueNode()
+	value, err := p.parseValueNode(p.currentDepth + len(keys))
 	if err != nil {
 		return err
 	}
 
 	lineComment := p.consumeLineComment()
 
-	fullPath := p.currentPath + "\x00" + joinKeys(keys)
-
 	target := p.current
 	for i, k := range keys[:len(keys)-1] {
-		subPath := p.currentPath + "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
-
-		if p.defined[subPath] && !p.implicit[subPath] {
-			return &DuplicateKeyError{Key: displayPath(keys[:i+1]), Pos: keys[0].pos}
+		c := target.lookup(k.value)
+		switch {
+		case c == nil:
+			c = &node{kind: nodeTable, key: []string{k.value}, pos: k.pos, def: defDotted}
+			target.addChild(c)
+		case c.kind == nodeKeyValue && pairValue(c).kind == nodeInlineTable:
+			return &InlineTableError{Table: displayPath(keys[:i+1]), Pos: keys[0].startPos()}
+		case c.kind != nodeTable || c.def == defExplicit:
+			return &DuplicateKeyError{Key: displayPath(keys[:i+1]), Pos: keys[0].startPos()}
+		case c.def == defImplicit:
+			// Defined by dotted keys from here on, so a later header for it
+			// is a redefinition.
+			c.def = defDotted
 		}
-		if p.inline[subPath] {
-			return &InlineTableError{Table: displayPath(keys[:i+1]), Pos: keys[0].pos}
-		}
-
-		existing := findChild(target, k.value)
-		if existing == nil {
-			sub := &node{
-				kind: nodeTable,
-				key:  []string{k.value},
-				pos:  k.pos,
-			}
-			target.children = append(target.children, sub)
-			p.implicit[subPath] = true
-			p.dottedImplicit[subPath] = true
-			target = sub
-		} else {
-			if existing.kind != nodeTable && existing.kind != nodeInlineTable {
-				return &DuplicateKeyError{Key: displayPath(keys[:i+1]), Pos: keys[0].pos}
-			}
-			target = existing
-		}
+		target = c
 	}
 
 	lastKey := keys[len(keys)-1].value
-	if p.defined[fullPath] || findChild(target, lastKey) != nil {
-		return &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].pos}
+	if target.lookup(lastKey) != nil {
+		return &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].startPos()}
 	}
-	p.defined[fullPath] = true
 
 	kv := &node{
 		kind:        nodeKeyValue,
@@ -331,40 +412,18 @@ func (p *parser) parseKeyValue() error {
 		comment:     lineComment,
 		span:        srcSpan{start: int(keys[0].start), end: value.span.end},
 		keySpan:     keyPathSpan(keys),
+		children:    []*node{value},
 	}
-	kv.children = append(kv.children, value)
-
-	if value.kind == nodeInlineTable {
-		p.markInline(fullPath, value)
-	}
-	if value.kind == nodeArray {
-		p.staticArrays[fullPath] = true
-	}
-
-	target.children = append(target.children, kv)
+	target.addChild(kv)
 	return nil
 }
 
-func (p *parser) markInline(path string, n *node) {
-	p.inline[path] = true
-	for _, child := range n.children {
-		if child.kind == nodeKeyValue && len(child.key) > 0 {
-			childPath := path + "\x00" + child.key[0]
-			p.inline[childPath] = true
-			if len(child.children) > 0 && child.children[0].kind == nodeInlineTable {
-				p.markInline(childPath, child.children[0])
-			}
-		}
-	}
-}
-
 func (p *parser) parseKeyPath() ([]token, error) {
-	var keys []token
 	tok := p.peek()
 	if tok.kind != tokenBareKey && tok.kind != tokenBasicString && tok.kind != tokenLiteralString {
 		return nil, p.syntaxError("expected key")
 	}
-	keys = append(keys, tok)
+	keys := []token{tok}
 	p.advance()
 
 	for p.pos < len(p.tokens) && p.peek().kind == tokenDot {
@@ -380,7 +439,9 @@ func (p *parser) parseKeyPath() ([]token, error) {
 	return keys, nil
 }
 
-func (p *parser) parseValueNode() (*node, error) {
+// parseValueNode parses a value; depth is the nesting depth it has if it is
+// an array or inline table.
+func (p *parser) parseValueNode(depth int) (*node, error) {
 	if err := p.checkNodeLimit(); err != nil {
 		return nil, err
 	}
@@ -423,23 +484,27 @@ func (p *parser) parseValueNode() (*node, error) {
 		p.advance()
 		return &node{kind: nodeLocalTime, value: tok.value, pos: tok.pos, span: tokenSpan(tok)}, nil
 	case tokenArrayStart:
-		return p.parseArray()
+		return p.parseArray(depth)
 	case tokenInlineTableStart:
-		return p.parseInlineTable()
+		return p.parseInlineTable(depth)
+	case tokenNewline, tokenComment, tokenStreamEnd, tokenEOF:
+		return nil, p.syntaxError("missing value")
 	default:
-		return nil, p.syntaxError(fmt.Sprintf("unexpected token %s in value", tok))
+		return nil, p.syntaxError(fmt.Sprintf("unexpected %s in value", tok.describe()))
 	}
 }
 
-func (p *parser) parseArray() (*node, error) {
+func (p *parser) parseArray(depth int) (*node, error) {
 	open := p.peek()
-	start := open.pos
+	if err := p.checkDepth(depth, open); err != nil {
+		return nil, err
+	}
 	p.advance() // consume [
-	arr := &node{kind: nodeArray, pos: start}
+	arr := &node{kind: nodeArray, pos: open.pos}
 
 	p.skipNewlinesAndComments()
 	for p.pos < len(p.tokens) && p.peek().kind != tokenArrayEnd {
-		val, err := p.parseValueNode()
+		val, err := p.parseValueNode(depth + 1)
 		if err != nil {
 			return nil, err
 		}
@@ -460,13 +525,13 @@ func (p *parser) parseArray() (*node, error) {
 	return arr, nil
 }
 
-func (p *parser) parseInlineTable() (*node, error) {
+func (p *parser) parseInlineTable(depth int) (*node, error) {
 	open := p.peek()
-	start := open.pos
+	if err := p.checkDepth(depth, open); err != nil {
+		return nil, err
+	}
 	p.advance() // consume {
-	tbl := &node{kind: nodeInlineTable, pos: start}
-
-	defined := make(map[string]bool)
+	tbl := &node{kind: nodeInlineTable, pos: open.pos}
 
 	p.skipNewlinesAndComments()
 	for p.pos < len(p.tokens) && p.peek().kind != tokenInlineTableEnd {
@@ -474,60 +539,46 @@ func (p *parser) parseInlineTable() (*node, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := p.checkDepth(depth+len(keys)-1, keys[0]); err != nil {
+			return nil, err
+		}
 		if !p.expectToken(tokenKeyValueSep) {
 			return nil, p.syntaxError("expected = in inline table")
 		}
-		val, err := p.parseValueNode()
+		val, err := p.parseValueNode(depth + len(keys))
 		if err != nil {
 			return nil, err
 		}
 
-		fullPath := joinKeys(keys)
-		if defined[fullPath] {
-			return nil, &DuplicateKeyError{Key: fullPath, Pos: keys[0].pos}
-		}
-		defined[fullPath] = true
-
 		target := tbl
 		for i, k := range keys[:len(keys)-1] {
-			subPath := joinKeyStrings(keyStrings(keys[:i+1]))
-			if defined[subPath] {
-				return nil, &DuplicateKeyError{Key: subPath, Pos: k.pos}
-			}
-			existing := findChild(target, k.value)
-			if existing == nil {
-				sub := &node{
-					kind: nodeInlineTable,
-					key:  []string{k.value},
-					pos:  k.pos,
-				}
-				kv := &node{
-					kind:     nodeKeyValue,
-					key:      []string{k.value},
-					pos:      k.pos,
-					children: []*node{sub},
-				}
-				target.children = append(target.children, kv)
+			c := target.lookup(k.value)
+			if c == nil {
+				sub := &node{kind: nodeInlineTable, key: []string{k.value}, pos: k.pos, def: defDotted}
+				target.addChild(&node{kind: nodeKeyValue, key: []string{k.value}, pos: k.pos, children: []*node{sub}})
 				target = sub
-			} else {
-				target = existing
+				continue
 			}
+			v := pairValue(c)
+			if v.kind != nodeInlineTable || v.def != defDotted {
+				return nil, &DuplicateKeyError{Key: displayPath(keys[:i+1]), Pos: k.startPos()}
+			}
+			target = v
 		}
 
 		lastKey := keys[len(keys)-1].value
-		if findChild(target, lastKey) != nil {
-			return nil, &DuplicateKeyError{Key: fullPath, Pos: keys[0].pos}
+		if target.lookup(lastKey) != nil {
+			return nil, &DuplicateKeyError{Key: displayPath(keys), Pos: keys[0].startPos()}
 		}
 
-		kv := &node{
+		target.addChild(&node{
 			kind:     nodeKeyValue,
 			key:      []string{lastKey},
 			pos:      keys[0].pos,
 			children: []*node{val},
 			span:     srcSpan{start: int(keys[0].start), end: val.span.end},
 			keySpan:  keyPathSpan(keys),
-		}
-		target.children = append(target.children, kv)
+		})
 		p.skipNewlinesAndComments()
 		if p.pos < len(p.tokens) && p.peek().kind == tokenComma {
 			p.advance()
@@ -553,56 +604,6 @@ func (p *parser) skipNewlinesAndComments() {
 	}
 }
 
-func (p *parser) ensureTable(keys []token) *node {
-	target := p.root
-	for i, k := range keys {
-		child := findChild(target, k.value)
-		if child == nil {
-			child = &node{
-				kind: nodeTable,
-				key:  []string{k.value},
-				pos:  k.pos,
-			}
-			target.children = append(target.children, child)
-			subPath := "\x00" + joinKeyStrings(keyStrings(keys[:i+1]))
-			p.implicit[subPath] = true
-		}
-		if child.kind == nodeArrayTable {
-			last := findLastArrayEntry(target, k.value)
-			if last != nil {
-				child = last
-			}
-		}
-		target = child
-	}
-	return target
-}
-
-func findChild(n *node, key string) *node {
-	for _, child := range n.children {
-		if len(child.key) > 0 && child.key[0] == key {
-			if child.kind == nodeKeyValue {
-				if len(child.children) > 0 && (child.children[0].kind == nodeInlineTable || child.children[0].kind == nodeTable) {
-					return child.children[0]
-				}
-				continue
-			}
-			return child
-		}
-	}
-	return nil
-}
-
-func findLastArrayEntry(parent *node, key string) *node {
-	var last *node
-	for _, child := range parent.children {
-		if child.kind == nodeArrayTable && len(child.key) > 0 && child.key[0] == key {
-			last = child
-		}
-	}
-	return last
-}
-
 func (p *parser) peek() token {
 	if p.pos >= len(p.tokens) {
 		return token{kind: tokenEOF}
@@ -624,32 +625,10 @@ func (p *parser) expectToken(kind tokenKind) bool {
 	return false
 }
 
+// syntaxError reports msg at the token the parser stopped at.
 func (p *parser) syntaxError(msg string) error {
-	pos := Position{}
-	if p.pos < len(p.tokens) {
-		pos = p.tokens[p.pos].pos
-	}
-	return &SyntaxError{Message: msg, Pos: pos}
-}
-
-func joinKeys(keys []token) string {
-	parts := make([]string, len(keys))
-	for i, k := range keys {
-		parts[i] = k.value
-	}
-	return strings.Join(parts, "\x00")
-}
-
-func joinKeyStrings(keys []string) string {
-	return strings.Join(keys, "\x00")
-}
-
-func keyStrings(keys []token) []string {
-	s := make([]string, len(keys))
-	for i, k := range keys {
-		s[i] = k.value
-	}
-	return s
+	tok := p.peek()
+	return &SyntaxError{Message: msg, Pos: tok.startPos(), Token: tok.describe()}
 }
 
 func displayPath(keys []token) string {

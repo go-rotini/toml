@@ -9,8 +9,10 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Marshaler is implemented by types that can encode themselves into a
@@ -34,6 +36,68 @@ type encoder struct {
 	opts *encoderOptions
 	buf  bytes.Buffer
 	ctx  context.Context
+
+	scalars *scanner // reused by checkScalar
+
+	depth int               // nested values being encoded
+	seen  map[cycleKey]bool // pointers, maps and slices on the current path, past cycleDepth
+}
+
+// cycleDepth is the nesting depth past which the encoder looks for a value
+// that contains itself; shallower values cannot loop forever.
+const cycleDepth = 1000
+
+// cycleKey identifies a pointer, map or slice by what it refers to.
+type cycleKey struct {
+	t   reflect.Type
+	ptr uintptr
+	n   int
+}
+
+// visit records that encoding descends into rv. Past cycleDepth it reports
+// a pointer, map or slice that is already being encoded further up, which
+// would otherwise recurse forever. Each visit that returns no error must be
+// paired with a call to leave.
+func (e *encoder) visit(rv reflect.Value) (cycleKey, error) {
+	e.depth++
+	if e.depth <= cycleDepth {
+		return cycleKey{}, nil
+	}
+	for rv.Kind() == reflect.Interface && !rv.IsNil() {
+		rv = rv.Elem()
+	}
+	var k cycleKey
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map:
+		if rv.IsNil() {
+			return cycleKey{}, nil
+		}
+		k = cycleKey{t: rv.Type(), ptr: rv.Pointer()}
+	case reflect.Slice:
+		if rv.IsNil() {
+			return cycleKey{}, nil
+		}
+		k = cycleKey{t: rv.Type(), ptr: rv.Pointer(), n: rv.Len()}
+	default:
+		return cycleKey{}, nil
+	}
+	if e.seen[k] {
+		e.depth--
+		return cycleKey{}, fmt.Errorf("toml: %w via %s", errEncodeCycle, rv.Type())
+	}
+	if e.seen == nil {
+		e.seen = make(map[cycleKey]bool)
+	}
+	e.seen[k] = true
+	return k, nil
+}
+
+// leave undoes the visit that returned k.
+func (e *encoder) leave(k cycleKey) {
+	e.depth--
+	if k.t != nil {
+		delete(e.seen, k)
+	}
 }
 
 func newEncoder(opts *encoderOptions) *encoder {
@@ -96,14 +160,14 @@ func (e *encoder) encodeStruct(rv reflect.Value, path []string) error {
 	var simples, tables []fieldEntry
 
 	for _, fi := range sf.fields {
-		fv := rv.FieldByIndex(fi.index)
-		if fi.omitEmpty && isEmpty(fv) {
+		fv, err := rv.FieldByIndexErr(fi.index)
+		if err != nil || isNil(fv) {
 			continue
 		}
-		if e.opts.omitEmpty && isEmpty(fv) {
+		if (fi.omitEmpty || e.opts.omitEmpty) && isEmpty(fv) {
 			continue
 		}
-		if isTableValue(fv) && !fi.inline && !e.opts.inlineTable {
+		if isTableValue(fv) && !fi.inline && !fi.commented && !e.opts.inlineTable {
 			tables = append(tables, fieldEntry{fi, fv})
 		} else {
 			simples = append(simples, fieldEntry{fi, fv})
@@ -125,15 +189,36 @@ func (e *encoder) encodeStruct(rv reflect.Value, path []string) error {
 	return nil
 }
 
+// sortedMapKeys returns rv's keys and their TOML spellings, sorted by
+// spelling.
+func sortedMapKeys(rv reflect.Value) ([]reflect.Value, []string) {
+	keys := rv.MapKeys()
+	names := make([]string, len(keys))
+	for i, k := range keys {
+		names[i] = fmt.Sprint(k.Interface())
+	}
+	sort.Sort(byName{keys, names})
+	return keys, names
+}
+
+type byName struct {
+	keys  []reflect.Value
+	names []string
+}
+
+func (b byName) Len() int           { return len(b.keys) }
+func (b byName) Less(i, j int) bool { return b.names[i] < b.names[j] }
+func (b byName) Swap(i, j int) {
+	b.keys[i], b.keys[j] = b.keys[j], b.keys[i]
+	b.names[i], b.names[j] = b.names[j], b.names[i]
+}
+
 func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 	if rv.IsNil() {
 		return nil
 	}
 
-	keys := rv.MapKeys()
-	sort.Slice(keys, func(i, j int) bool {
-		return fmt.Sprint(keys[i].Interface()) < fmt.Sprint(keys[j].Interface())
-	})
+	keys, names := sortedMapKeys(rv)
 
 	type mapEntry struct {
 		key   string
@@ -141,16 +226,18 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 	}
 	var simples, tables []mapEntry
 
-	for _, k := range keys {
-		key := fmt.Sprint(k.Interface())
+	for i, k := range keys {
 		val := rv.MapIndex(k)
 		for val.Kind() == reflect.Interface {
 			val = val.Elem()
 		}
-		if val.IsValid() && isTableValue(val) && !e.opts.inlineTable {
-			tables = append(tables, mapEntry{key, val})
+		if isNil(val) {
+			continue
+		}
+		if isTableValue(val) && !e.opts.inlineTable {
+			tables = append(tables, mapEntry{names[i], val})
 		} else {
-			simples = append(simples, mapEntry{key, val})
+			simples = append(simples, mapEntry{names[i], val})
 		}
 	}
 
@@ -164,30 +251,33 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 	}
 
 	for _, entry := range tables {
-		val := entry.value
-		for val.Kind() == reflect.Pointer || val.Kind() == reflect.Interface {
-			val = val.Elem()
-		}
 		subPath := append(append([]string{}, path...), entry.key)
-		if val.Kind() == reflect.Slice && val.Len() > 0 {
-			elem := val.Index(0)
-			for elem.Kind() == reflect.Pointer || elem.Kind() == reflect.Interface {
-				elem = elem.Elem()
-			}
-			if elem.Kind() == reflect.Struct || elem.Kind() == reflect.Map {
-				if err := e.encodeArrayTables(val, subPath); err != nil {
-					return err
-				}
-				continue
-			}
-		}
-		e.writeTableHeader(subPath)
-		if err := e.encodeTable(val, subPath); err != nil {
+		if err := e.encodeMapTable(entry.value, subPath); err != nil {
 			return err
 		}
-		e.writeCommentBlock(e.headerIndent(subPath), e.optionComment(subPath, FootCommentPos))
 	}
 
+	return nil
+}
+
+// encodeMapTable writes a map entry that is a table or an array of tables.
+func (e *encoder) encodeMapTable(val reflect.Value, path []string) error {
+	k, err := e.visit(val)
+	if err != nil {
+		return err
+	}
+	defer e.leave(k)
+	for val.Kind() == reflect.Pointer || val.Kind() == reflect.Interface {
+		val = val.Elem()
+	}
+	if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
+		return e.encodeArrayTables(val, path)
+	}
+	e.writeTableHeader(path)
+	if err := e.encodeTable(val, path); err != nil {
+		return err
+	}
+	e.writeCommentBlock(e.headerIndent(path), e.optionComment(path, FootCommentPos))
 	return nil
 }
 
@@ -197,7 +287,13 @@ func (e *encoder) encodeMap(rv reflect.Value, path []string) error {
 func (e *encoder) encodeArrayTables(rv reflect.Value, path []string) error {
 	for i := range rv.Len() {
 		e.writeArrayTableHeader(path, i == 0)
-		if err := e.encodeTable(rv.Index(i), path); err != nil {
+		k, err := e.visit(rv.Index(i))
+		if err != nil {
+			return err
+		}
+		err = e.encodeTable(rv.Index(i), path)
+		e.leave(k)
+		if err != nil {
 			return err
 		}
 	}
@@ -206,18 +302,22 @@ func (e *encoder) encodeArrayTables(rv reflect.Value, path []string) error {
 }
 
 func (e *encoder) encodeField(fi fieldInfo, fv reflect.Value, path []string) error {
-	if fi.comment != "" {
-		e.buf.WriteString(e.indentPrefix(len(path)))
-		e.buf.WriteString("# ")
-		e.buf.WriteString(fi.comment)
-		e.buf.WriteByte('\n')
+	indent := e.indentPrefix(len(path))
+	e.writeCommentBlock(indent, fi.comment)
+	if !fi.commented {
+		return e.writeKeyValue(path, fi.name, "", func() error {
+			return e.encodeValue(fv, fi)
+		})
 	}
-	prefix := ""
-	if fi.commented {
-		prefix = "# "
-	}
-	return e.writeKeyValue(path, fi.name, prefix, func() error {
-		return e.encodeValue(fv, fi)
+	// A commented field may span lines, as a multi-line array or string
+	// does; every line is commented out.
+	return e.writeKeyValue(path, fi.name, "# ", func() error {
+		sub := &encoder{opts: e.opts, ctx: e.ctx}
+		if err := sub.encodeValue(fv, fi); err != nil {
+			return err
+		}
+		e.buf.WriteString(strings.ReplaceAll(sub.buf.String(), "\n", "\n"+indent+"# "))
+		return nil
 	})
 }
 
@@ -225,7 +325,10 @@ func (e *encoder) encodeField(fi fieldInfo, fv reflect.Value, path []string) err
 // [WithComment] comments. prefix is written before the key ("# " for a
 // commented field), and value writes the value.
 func (e *encoder) writeKeyValue(path []string, key, prefix string, value func() error) error {
-	keyPath := append(append([]string{}, path...), key)
+	var keyPath []string
+	if e.opts.comments != nil {
+		keyPath = append(append([]string{}, path...), key)
+	}
 	indent := e.indentPrefix(len(path))
 	e.writeCommentBlock(indent, e.optionComment(keyPath, HeadCommentPos))
 	e.buf.WriteString(indent)
@@ -242,28 +345,22 @@ func (e *encoder) writeKeyValue(path []string, key, prefix string, value func() 
 }
 
 func (e *encoder) encodeTableField(fi fieldInfo, fv reflect.Value, path []string) error {
-	for fv.Kind() == reflect.Pointer {
-		if fv.IsNil() {
-			return nil
-		}
-		fv = fv.Elem()
-	}
-	for fv.Kind() == reflect.Interface {
-		fv = fv.Elem()
-	}
-
 	subPath := append(append([]string{}, path...), fi.name)
+	k, err := e.visit(fv)
+	if err != nil {
+		return err
+	}
+	defer e.leave(k)
+	for fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Interface {
+		fv = fv.Elem()
+	}
 
-	if fv.Kind() == reflect.Slice {
+	e.writeCommentBlock(e.headerIndent(subPath), fi.comment)
+
+	if fv.Kind() == reflect.Slice || fv.Kind() == reflect.Array {
 		return e.encodeArrayTables(fv, subPath)
 	}
 
-	if fi.comment != "" {
-		e.buf.WriteString(e.headerIndent(subPath))
-		e.buf.WriteString("# ")
-		e.buf.WriteString(fi.comment)
-		e.buf.WriteByte('\n')
-	}
 	e.writeTableHeader(subPath)
 	if err := e.encodeTable(fv, subPath); err != nil {
 		return err
@@ -272,28 +369,52 @@ func (e *encoder) encodeTableField(fi fieldInfo, fv reflect.Value, path []string
 	return nil
 }
 
+// isNil reports whether rv holds no value: it is invalid, or a nil pointer
+// or interface. TOML has no null, so such values are left out.
+func isNil(rv reflect.Value) bool {
+	for rv.Kind() == reflect.Interface && !rv.IsNil() {
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Invalid:
+		return true
+	case reflect.Pointer, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
+}
+
 func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
-	for rv.Kind() == reflect.Pointer {
+	k, err := e.visit(rv)
+	if err != nil {
+		return err
+	}
+	defer e.leave(k)
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
 		if rv.IsNil() {
-			e.buf.WriteString(`""`)
-			return nil
+			return errNilValue
 		}
 		rv = rv.Elem()
 	}
-	for rv.Kind() == reflect.Interface {
-		rv = rv.Elem()
-	}
-
 	if !rv.IsValid() {
-		e.buf.WriteString(`""`)
-		return nil
+		return errNilValue
 	}
 
 	if rv.Kind() == reflect.Struct && isScalarStruct(rv.Type()) {
-		if m, ok := reflect.TypeAssert[encoding.TextMarshaler](rv); ok {
+		v := rv.Interface()
+		if t, ok := v.(time.Time); ok {
+			if _, offset := t.Zone(); offset%60 != 0 {
+				// TOML offsets have no seconds; UTC keeps the instant.
+				v = t.UTC()
+			}
+		}
+		if m, ok := v.(encoding.TextMarshaler); ok {
 			text, err := m.MarshalText()
 			if err != nil {
-				return err
+				if fi.name != "" {
+					return fmt.Errorf("toml: key %q: %w", fi.name, err)
+				}
+				return fmt.Errorf("toml: %w", err)
 			}
 			e.buf.Write(text)
 			return nil
@@ -400,10 +521,13 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 		e.encodeInt(rv.Int(), fi)
 		return nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if rv.Uint() > math.MaxInt64 {
+			return fmt.Errorf("%w: %d", errUintOverflow, rv.Uint())
+		}
 		e.encodeUint(rv.Uint(), fi)
 		return nil
 	case reflect.Float32, reflect.Float64:
-		return e.encodeFloat(rv.Float())
+		return e.encodeFloat(rv.Float(), rv.Type().Bits())
 	case reflect.Slice:
 		if rv.Type().Elem().Kind() == reflect.Uint8 {
 			e.encodeString(encodeBase64(rv.Bytes()), fi)
@@ -423,59 +547,94 @@ func (e *encoder) encodeValue(rv reflect.Value, fi fieldInfo) error {
 
 func (e *encoder) encodeString(s string, fi fieldInfo) {
 	if fi.multiline || (e.opts.multiLineString && strings.Contains(s, "\n")) {
-		if fi.literal && !strings.Contains(s, "'''") {
-			e.buf.WriteString("'''\n")
-			e.buf.WriteString(s)
-			e.buf.WriteString("'''")
-			return
+		if fi.literal && canMultiLineLiteral(s) {
+			e.writeMultiLineLiteral(s)
+		} else {
+			e.writeMultiLineBasic(s)
 		}
-		e.buf.WriteString("\"\"\"\n")
-		e.buf.WriteString(escapeMultiLineBasic(s))
-		e.buf.WriteString("\"\"\"")
 		return
 	}
 
-	if fi.literal || (e.opts.literalString && !e.opts.basicStrings) {
-		if !strings.Contains(s, "'") && !containsControlChars(s) {
-			e.buf.WriteByte('\'')
-			e.buf.WriteString(s)
-			e.buf.WriteByte('\'')
-			return
-		}
+	if (fi.literal || (e.opts.literalString && !e.opts.basicStrings)) && canLiteral(s) {
+		e.writeLiteral(s)
+		return
 	}
+	e.writeBasic(s)
+}
 
+func (e *encoder) writeBasic(s string) {
 	e.buf.WriteByte('"')
 	e.buf.WriteString(escapeBasic(s))
 	e.buf.WriteByte('"')
 }
 
-func (e *encoder) encodeInt(v int64, fi fieldInfo) {
-	switch {
-	case fi.hex:
-		fmt.Fprintf(&e.buf, "0x%X", v)
-	case fi.octal:
-		fmt.Fprintf(&e.buf, "0o%o", v)
-	case fi.binary:
-		fmt.Fprintf(&e.buf, "0b%b", v)
-	default:
-		fmt.Fprintf(&e.buf, "%d", v)
+func (e *encoder) writeMultiLineBasic(s string) {
+	e.buf.WriteString("\"\"\"\n")
+	e.buf.WriteString(escapeMultiLineBasic(s))
+	e.buf.WriteString("\"\"\"")
+}
+
+func (e *encoder) writeLiteral(s string) {
+	e.buf.WriteByte('\'')
+	e.buf.WriteString(s)
+	e.buf.WriteByte('\'')
+}
+
+func (e *encoder) writeMultiLineLiteral(s string) {
+	e.buf.WriteString("'''\n")
+	e.buf.WriteString(s)
+	e.buf.WriteString("'''")
+}
+
+// canLiteral reports whether a literal string can hold s exactly.
+func canLiteral(s string) bool {
+	return utf8.ValidString(s) && !strings.Contains(s, "'") && !containsControlChars(s)
+}
+
+// canMultiLineLiteral reports whether a multi-line literal string can hold s
+// exactly. A \r is excluded because decoding turns \r\n into \n.
+func canMultiLineLiteral(s string) bool {
+	if !utf8.ValidString(s) || strings.Contains(s, "'''") {
+		return false
 	}
+	for _, r := range s {
+		if r != '\n' && (r < 0x20 && r != '\t' || r == 0x7f) {
+			return false
+		}
+	}
+	return true
+}
+
+// encodeInt writes v in the base its tag asks for. TOML has no negative
+// hexadecimal, octal or binary integers, so a negative value is written in
+// decimal.
+func (e *encoder) encodeInt(v int64, fi fieldInfo) {
+	if v < 0 {
+		e.buf.WriteString(strconv.FormatInt(v, 10))
+		return
+	}
+	e.encodeUint(uint64(v), fi)
 }
 
 func (e *encoder) encodeUint(v uint64, fi fieldInfo) {
 	switch {
 	case fi.hex:
-		fmt.Fprintf(&e.buf, "0x%X", v)
+		e.buf.WriteString("0x")
+		e.buf.WriteString(strings.ToUpper(strconv.FormatUint(v, 16)))
 	case fi.octal:
-		fmt.Fprintf(&e.buf, "0o%o", v)
+		e.buf.WriteString("0o")
+		e.buf.WriteString(strconv.FormatUint(v, 8))
 	case fi.binary:
-		fmt.Fprintf(&e.buf, "0b%b", v)
+		e.buf.WriteString("0b")
+		e.buf.WriteString(strconv.FormatUint(v, 2))
 	default:
-		fmt.Fprintf(&e.buf, "%d", v)
+		e.buf.WriteString(strconv.FormatUint(v, 10))
 	}
 }
 
-func (e *encoder) encodeFloat(v float64) error {
+// encodeFloat writes v with the fewest digits that read back as the same
+// float of bitSize bits.
+func (e *encoder) encodeFloat(v float64, bitSize int) error {
 	switch {
 	case math.IsInf(v, 1):
 		e.buf.WriteString("inf")
@@ -484,8 +643,8 @@ func (e *encoder) encodeFloat(v float64) error {
 	case math.IsNaN(v):
 		e.buf.WriteString("nan")
 	default:
-		s := fmt.Sprintf("%v", v)
-		if !strings.Contains(s, ".") && !strings.Contains(s, "e") && !strings.Contains(s, "E") {
+		s := strconv.FormatFloat(v, 'g', -1, bitSize)
+		if !strings.ContainsAny(s, ".eE") {
 			s += ".0"
 		}
 		e.buf.WriteString(s)
@@ -531,7 +690,10 @@ func (e *encoder) encodeInlineTable(rv reflect.Value) error {
 	sf := getStructFields(rv.Type())
 	first := true
 	for _, fi := range sf.fields {
-		fv := rv.FieldByIndex(fi.index)
+		fv, err := rv.FieldByIndexErr(fi.index)
+		if err != nil || isNil(fv) {
+			continue
+		}
 		if (fi.omitEmpty || e.opts.omitEmpty) && isEmpty(fv) {
 			continue
 		}
@@ -555,20 +717,22 @@ func (e *encoder) encodeInlineMap(rv reflect.Value) error {
 		return nil
 	}
 	e.buf.WriteString("{ ")
-	keys := rv.MapKeys()
-	sort.Slice(keys, func(i, j int) bool {
-		return fmt.Sprint(keys[i].Interface()) < fmt.Sprint(keys[j].Interface())
-	})
+	keys, names := sortedMapKeys(rv)
+	first := true
 	for i, k := range keys {
-		if i > 0 {
+		val := rv.MapIndex(k)
+		if isNil(val) {
+			continue
+		}
+		if !first {
 			e.buf.WriteString(", ")
 		}
-		key := fmt.Sprint(k.Interface())
-		e.writeKey(key)
+		e.writeKey(names[i])
 		e.buf.WriteString(" = ")
-		if err := e.encodeValue(rv.MapIndex(k), fieldInfo{}); err != nil {
+		if err := e.encodeValue(val, fieldInfo{}); err != nil {
 			return err
 		}
+		first = false
 	}
 	e.buf.WriteString(" }")
 	return nil
@@ -578,31 +742,36 @@ func (e *encoder) encodeNode(n *node) ([]byte, error) {
 	if n == nil {
 		return nil, nil
 	}
-	e.emitNode(n, nil)
+	if err := e.emitNode(n, nil); err != nil {
+		return nil, err
+	}
 	return e.buf.Bytes(), nil
 }
 
-func (e *encoder) emitNode(n *node, path []string) {
+func (e *encoder) emitNode(n *node, path []string) error {
 	switch n.kind {
 	case nodeTable:
 		if len(path) > 0 {
 			e.writeHeader(path, false, n.headComment, n.comment)
 		}
-		e.emitTableBody(n, path)
+		return e.emitTableBody(n, path)
 	case nodeArrayTable:
 		e.writeHeader(path, true, n.headComment, n.comment)
-		e.emitTableBody(n, path)
+		return e.emitTableBody(n, path)
 	}
+	return nil
 }
 
 // emitTableBody writes a table's key/value pairs and comments, then its foot
 // comment, then its sub-tables, so that no pair lands under a sub-table's
 // header.
-func (e *encoder) emitTableBody(n *node, path []string) {
+func (e *encoder) emitTableBody(n *node, path []string) error {
 	for _, child := range n.children {
 		switch child.kind {
 		case nodeKeyValue:
-			e.emitKeyValue(child)
+			if err := e.emitKeyValue(child); err != nil {
+				return err
+			}
 		case nodeComment:
 			e.writeCommentBlock("", child.value)
 		}
@@ -610,46 +779,52 @@ func (e *encoder) emitTableBody(n *node, path []string) {
 	e.writeCommentBlock("", n.footComment)
 	for _, child := range n.children {
 		if child.kind == nodeTable || child.kind == nodeArrayTable {
-			e.emitNode(child, append(append([]string{}, path...), child.key...))
+			if err := e.emitNode(child, append(append([]string{}, path...), child.key...)); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func (e *encoder) emitKeyValue(n *node) {
+func (e *encoder) emitKeyValue(n *node) error {
 	e.writeCommentBlock("", n.headComment)
 	e.writeDottedKey(n.key)
 	e.buf.WriteString(" = ")
 	if len(n.children) > 0 {
-		e.emitValue(n.children[0])
+		if err := e.emitValue(n.children[0]); err != nil {
+			return err
+		}
 	}
 	e.writeLineComment(n.comment)
 	e.buf.WriteByte('\n')
 	e.writeCommentBlock("", n.footComment)
+	return nil
 }
 
-func (e *encoder) emitValue(n *node) {
+// emitValue writes a value node. A string is written in its style when that
+// style can hold it exactly, and as a basic string otherwise; any other
+// scalar's text must be a single TOML value of its kind.
+func (e *encoder) emitValue(n *node) error {
 	switch n.kind {
 	case nodeString:
-		switch n.style {
-		case styleBasic:
-			e.buf.WriteByte('"')
-			e.buf.WriteString(escapeBasic(n.value))
-			e.buf.WriteByte('"')
-		case styleMultiLineBasic:
-			e.buf.WriteString("\"\"\"\n")
-			e.buf.WriteString(escapeMultiLineBasic(n.value))
-			e.buf.WriteString("\"\"\"")
-		case styleLiteral:
-			e.buf.WriteByte('\'')
-			e.buf.WriteString(n.value)
-			e.buf.WriteByte('\'')
-		case styleMultiLineLiteral:
-			e.buf.WriteString("'''\n")
-			e.buf.WriteString(n.value)
-			e.buf.WriteString("'''")
+		switch {
+		case n.style == styleMultiLineBasic:
+			e.writeMultiLineBasic(n.value)
+		case n.style == styleMultiLineLiteral && canMultiLineLiteral(n.value):
+			e.writeMultiLineLiteral(n.value)
+		case n.style == styleMultiLineLiteral:
+			e.writeMultiLineBasic(n.value)
+		case n.style == styleLiteral && canLiteral(n.value):
+			e.writeLiteral(n.value)
+		default:
+			e.writeBasic(n.value)
 		}
 	case nodeInteger, nodeFloat, nodeBoolean, nodeDateTime,
 		nodeLocalDateTime, nodeLocalDate, nodeLocalTime:
+		if err := e.checkScalar(n); err != nil {
+			return err
+		}
 		e.buf.WriteString(n.value)
 	case nodeArray:
 		e.buf.WriteByte('[')
@@ -657,7 +832,9 @@ func (e *encoder) emitValue(n *node) {
 			if i > 0 {
 				e.buf.WriteString(", ")
 			}
-			e.emitValue(child)
+			if err := e.emitValue(child); err != nil {
+				return err
+			}
 		}
 		e.buf.WriteByte(']')
 	case nodeInlineTable:
@@ -669,11 +846,52 @@ func (e *encoder) emitValue(n *node) {
 			e.writeDottedKey(child.key)
 			e.buf.WriteString(" = ")
 			if len(child.children) > 0 {
-				e.emitValue(child.children[0])
+				if err := e.emitValue(child.children[0]); err != nil {
+					return err
+				}
 			}
 		}
 		e.buf.WriteString(" }")
 	}
+	return nil
+}
+
+// scalarTokens maps the kinds of non-string scalar nodes to the token their
+// text must scan as.
+var scalarTokens = map[nodeKind]tokenKind{
+	nodeInteger:       tokenInteger,
+	nodeFloat:         tokenFloat,
+	nodeBoolean:       tokenBoolean,
+	nodeDateTime:      tokenOffsetDateTime,
+	nodeLocalDateTime: tokenLocalDateTime,
+	nodeLocalDate:     tokenLocalDate,
+	nodeLocalTime:     tokenLocalTime,
+}
+
+// checkScalar reports an error unless n's text is exactly one TOML value of
+// n's kind, so that writing it cannot add or break anything around it. It
+// scans the text with one scanner reused across the scalars of a tree.
+func (e *encoder) checkScalar(n *node) error {
+	if e.scalars == nil {
+		e.scalars = &scanner{}
+	}
+	s := e.scalars
+	*s = scanner{
+		src:       append(s.src[:0], n.value...),
+		tokens:    s.tokens[:0],
+		nestStack: s.nestStack[:0],
+		line:      1,
+		col:       1,
+		inValue:   true,
+	}
+	var err error
+	if !strings.HasPrefix(n.value, bom) && !s.atEnd() {
+		err = s.scanValue()
+	}
+	if err != nil || !s.atEnd() || len(s.tokens) != 1 || s.tokens[0].kind != scalarTokens[n.kind] {
+		return fmt.Errorf("%w %q", errInvalidScalar, n.value)
+	}
+	return nil
 }
 
 func (e *encoder) indentPrefix(depth int) string {
@@ -732,9 +950,7 @@ func (e *encoder) writeKey(key string) {
 	if isBareKey(key) {
 		e.buf.WriteString(key)
 	} else {
-		e.buf.WriteByte('"')
-		e.buf.WriteString(escapeBasic(key))
-		e.buf.WriteByte('"')
+		e.writeBasic(key)
 	}
 }
 
@@ -785,8 +1001,18 @@ func (e *encoder) writeLineComment(text string) {
 
 // commentText returns text as a comment: "#" followed by a space unless text
 // is empty or already starts with whitespace, so a parsed comment's text is
-// written back unchanged.
+// written back unchanged. Characters a comment cannot hold, control
+// characters other than tab and invalid UTF-8, become spaces and U+FFFD.
 func commentText(text string) string {
+	text = strings.ToValidUTF8(text, "�")
+	if containsControlChars(text) {
+		text = strings.Map(func(r rune) rune {
+			if isControlChar(r) {
+				return ' '
+			}
+			return r
+		}, text)
+	}
 	if text == "" || text[0] == ' ' || text[0] == '\t' {
 		return "#" + text
 	}
@@ -805,21 +1031,18 @@ func isBareKey(key string) bool {
 	return true
 }
 
+// isTableValue reports whether rv is written as a table: a struct or map,
+// or a non-empty slice whose elements all are.
 func isTableValue(rv reflect.Value) bool {
 	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
-		if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		if rv.IsNil() {
 			return false
 		}
 		rv = rv.Elem()
 	}
 	switch rv.Kind() {
 	case reflect.Struct:
-		if rv.Type() == reflect.TypeFor[time.Time]() ||
-			rv.Type() == reflect.TypeFor[LocalDate]() ||
-			rv.Type() == reflect.TypeFor[LocalTime]() ||
-			rv.Type() == reflect.TypeFor[LocalDateTime]() ||
-			rv.Type() == reflect.TypeFor[big.Int]() ||
-			rv.Type() == reflect.TypeFor[big.Float]() {
+		if isScalarStruct(rv.Type()) {
 			return false
 		}
 		if _, ok := reflect.TypeAssert[encoding.TextMarshaler](rv); ok {
@@ -841,17 +1064,19 @@ func isTableValue(rv reflect.Value) bool {
 		if rv.Len() == 0 {
 			return false
 		}
-		elem := rv.Index(0)
-		for elem.Kind() == reflect.Pointer || elem.Kind() == reflect.Interface {
-			elem = elem.Elem()
-		}
-		if elem.Kind() == reflect.Struct || elem.Kind() == reflect.Map {
-			if elem.Kind() == reflect.Struct {
-				return !isScalarStruct(elem.Type())
+		for i := range rv.Len() {
+			elem := rv.Index(i)
+			for elem.Kind() == reflect.Pointer || elem.Kind() == reflect.Interface {
+				if elem.IsNil() {
+					return false
+				}
+				elem = elem.Elem()
 			}
-			return true
+			if elem.Kind() != reflect.Struct && elem.Kind() != reflect.Map || !isTableValue(elem) {
+				return false
+			}
 		}
-		return false
+		return true
 	default:
 		return false
 	}
@@ -886,7 +1111,22 @@ func isEmpty(rv reflect.Value) bool {
 	return false
 }
 
+// needsEscape reports whether a basic string must escape b.
+func needsEscape(b byte) bool {
+	return b < 0x20 || b == 0x7f || b == '"' || b == '\\'
+}
+
 func escapeBasic(s string) string {
+	clean := true
+	for i := range len(s) {
+		if needsEscape(s[i]) {
+			clean = false
+			break
+		}
+	}
+	if clean && utf8.ValidString(s) {
+		return s
+	}
 	var buf strings.Builder
 	for _, r := range s {
 		switch r {
@@ -915,9 +1155,24 @@ func escapeBasic(s string) string {
 	return buf.String()
 }
 
+// escapeMultiLineBasic escapes s for a multi-line basic string. Newlines
+// and tabs stay as they are; every third quote of a run is escaped so the
+// run cannot close the string.
 func escapeMultiLineBasic(s string) string {
 	var buf strings.Builder
+	quotes := 0
 	for _, r := range s {
+		if r == '"' {
+			quotes++
+			if quotes == 3 {
+				buf.WriteString(`\"`)
+				quotes = 0
+				continue
+			}
+			buf.WriteByte('"')
+			continue
+		}
+		quotes = 0
 		switch r {
 		case '\b':
 			buf.WriteString(`\b`)
@@ -928,6 +1183,7 @@ func escapeMultiLineBasic(s string) string {
 		case '\f':
 			buf.WriteString(`\f`)
 		case '\r':
+			buf.WriteString(`\r`)
 		case '\\':
 			buf.WriteString(`\\`)
 		default:
