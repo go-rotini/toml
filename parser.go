@@ -51,7 +51,7 @@ func parseDocument(data []byte, maxNodes, maxDepth int) (*scanner, *node, error)
 	}
 	tokens, err := s.scan()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, s.inputErrorPos(err)
 	}
 	p := newParser(tokens)
 	p.maxNodes = maxNodes
@@ -60,7 +60,10 @@ func parseDocument(data []byte, maxNodes, maxDepth int) (*scanner, *node, error)
 	}
 	root, err := p.parse()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, s.inputErrorPos(err)
+	}
+	if s.mapsOffsets() {
+		s.inputPositions(root)
 	}
 	return s, root, nil
 }

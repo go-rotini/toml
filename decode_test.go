@@ -3796,6 +3796,40 @@ func TestDecodeDefaultOutOfRange(t *testing.T) {
 	if err := UnmarshalWithOptions([]byte(""), &ok, WithDefaults()); err != nil || ok != (OK{-128, 255, 1.5}) {
 		t.Errorf("in-range defaults: %+v, %v", ok, err)
 	}
+	var top struct {
+		F float32 `toml:"f,default=3.4028235e38"`
+		G float32 `toml:"g,default=-3.4028235e38"`
+	}
+	if err := UnmarshalWithOptions([]byte(""), &top, WithDefaults()); err != nil ||
+		top.F != math.MaxFloat32 || top.G != -math.MaxFloat32 {
+		t.Errorf("MaxFloat32 defaults: %+v, %v", top, err)
+	}
+}
+
+func TestFloat32RangeEdge(t *testing.T) {
+	type S struct {
+		F float32 `toml:"f"`
+	}
+	for _, f := range []float32{math.MaxFloat32, -math.MaxFloat32, math.SmallestNonzeroFloat32} {
+		out, err := Marshal(S{F: f})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back S
+		if err := Unmarshal(out, &back); err != nil || back.F != f {
+			t.Errorf("%q: got %v, %v; want %v", out, back.F, err, f)
+		}
+	}
+	// Half a last-place unit above MaxFloat32 rounds up to infinity.
+	edge := strconv.FormatFloat(math.MaxFloat32+0x1p103, 'g', -1, 64)
+	below := strconv.FormatFloat(math.Nextafter(math.MaxFloat32+0x1p103, 0), 'g', -1, 64)
+	var s S
+	if err := Unmarshal([]byte("f = "+edge+"\n"), &s); !errors.Is(err, ErrOverflow) {
+		t.Errorf("f = %s: err = %v, want OverflowError", edge, err)
+	}
+	if err := Unmarshal([]byte("f = "+below+"\n"), &s); err != nil || s.F != math.MaxFloat32 {
+		t.Errorf("f = %s: %v, %v; want MaxFloat32", below, s.F, err)
+	}
 }
 
 func TestDecodeInvalidMapKeyIsTypeError(t *testing.T) {

@@ -2,6 +2,7 @@ package toml
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -40,6 +41,9 @@ func newScanner(src []byte) (*scanner, error) {
 	bomLen := len(src) - len(stripped)
 	src, crlf, err := normalizeCRLF(stripped)
 	if err != nil {
+		if se, ok := errors.AsType[*SyntaxError](err); ok {
+			se.Pos.Offset += bomLen
+		}
 		return nil, err
 	}
 	return &scanner{
@@ -76,7 +80,7 @@ func normalizeCRLF(src []byte) ([]byte, []int, error) {
 			}
 			return nil, nil, &SyntaxError{
 				Message: "bare carriage return not allowed",
-				Pos:     Position{Line: line, Column: utf8.RuneCount(buf[lineStart:]) + 1, Offset: len(buf)},
+				Pos:     Position{Line: line, Column: utf8.RuneCount(buf[lineStart:]) + 1, Offset: i},
 			}
 		}
 		buf = append(buf, src[i])

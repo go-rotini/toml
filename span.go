@@ -1,6 +1,7 @@
 package toml
 
 import (
+	"errors"
 	"math"
 	"slices"
 )
@@ -97,12 +98,59 @@ func (s *scanner) inputPosition(off int) Position {
 	if !found {
 		line--
 	}
-	crs, _ := slices.BinarySearch(s.crlf, off)
 	return Position{
 		Line:   line + 1,
 		Column: s.runesBetween(s.lineStarts[line], off) + 1,
-		Offset: off + crs + s.bomLen,
+		Offset: s.inputOffset(off),
 	}
+}
+
+// inputOffset maps off, an offset in the normalized source, back to the
+// input: the byte-order mark and the \r of each \r\n before it restored.
+func (s *scanner) inputOffset(off int) int {
+	crs, _ := slices.BinarySearch(s.crlf, off)
+	return off + crs + s.bomLen
+}
+
+// mapsOffsets reports whether offsets in the normalized source differ from
+// offsets in the input.
+func (s *scanner) mapsOffsets() bool {
+	return s.bomLen > 0 || len(s.crlf) > 0
+}
+
+// inputPositions maps the Offset of every position in the tree at n to
+// the input. Line and Column need no mapping.
+func (s *scanner) inputPositions(n *node) {
+	n.pos.Offset = s.inputOffset(n.pos.Offset)
+	for _, c := range n.children {
+		s.inputPositions(c)
+	}
+}
+
+// inputErrorPos maps the Offset of a positioned error from the scanner or
+// parser to the input.
+func (s *scanner) inputErrorPos(err error) error {
+	var (
+		se  *SyntaxError
+		de  *DuplicateKeyError
+		ce  *ConflictError
+		ie  *InlineTableError
+		pos *Position
+	)
+	switch {
+	case errors.As(err, &se):
+		pos = &se.Pos
+	case errors.As(err, &de):
+		pos = &de.Pos
+	case errors.As(err, &ce):
+		pos = &ce.Pos
+	case errors.As(err, &ie):
+		pos = &ie.Pos
+	}
+	if pos != nil && pos.Line > 0 {
+		pos.Offset = s.inputOffset(pos.Offset)
+	}
+	return err
 }
 
 // runeChunk is the stride of the rune counts inputPosition records, so a

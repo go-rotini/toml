@@ -590,6 +590,15 @@ func parseInteger(s string) (int64, error) {
 	return strconv.ParseInt(s, base, 64)
 }
 
+// floatOverflows reports whether f, a float64, rounds to an infinity
+// when stored in a float of kind k: a finite float32 overflows at
+// MaxFloat32 plus half its last-place unit, as values from there round
+// up. Values below that, such as the shortest text for MaxFloat32, round
+// to a finite float32.
+func floatOverflows(f float64, k reflect.Kind) bool {
+	return k == reflect.Float32 && !math.IsInf(f, 0) && math.Abs(f) >= math.MaxFloat32+0x1p103
+}
+
 func (d *decoder) decodeFloat(s string, rv reflect.Value, pos Position) error {
 	f, err := parseFloat(s)
 	if err != nil {
@@ -599,7 +608,7 @@ func (d *decoder) decodeFloat(s string, rv reflect.Value, pos Position) error {
 
 	switch rv.Kind() {
 	case reflect.Float32, reflect.Float64:
-		if !math.IsInf(f, 0) && rv.OverflowFloat(f) {
+		if floatOverflows(f, rv.Kind()) {
 			return &OverflowError{Value: s, Type: rv.Type().String(), Pos: pos}
 		}
 		rv.SetFloat(f)
@@ -923,7 +932,7 @@ func (d *decoder) applyDefault(fi fieldInfo, fv reflect.Value) error {
 		if err != nil {
 			return &DefaultError{Field: fi.name, Message: errInvalidFloatDefault.Error()}
 		}
-		if fv.OverflowFloat(f) {
+		if floatOverflows(f, fv.Kind()) {
 			return &DefaultError{Field: fi.name, Message: errDefaultOutOfRange.Error()}
 		}
 		fv.SetFloat(f)
