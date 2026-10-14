@@ -2,6 +2,7 @@ package toml
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -68,9 +69,8 @@ func parseTag(tag string) fieldInfo {
 }
 
 type structFields struct {
-	fields    []fieldInfo
-	byName    map[string]int
-	conflicts []string
+	fields []fieldInfo
+	byName map[string]int
 }
 
 var structFieldCache sync.Map
@@ -83,12 +83,15 @@ func getStructFields(t reflect.Type) *structFields {
 	sf := &structFields{
 		byName: make(map[string]int),
 	}
-	collectFields(t, nil, sf)
+	collectFields(t, nil, []reflect.Type{t}, sf)
 	structFieldCache.Store(t, sf)
 	return sf
 }
 
-func collectFields(t reflect.Type, index []int, sf *structFields) {
+// collectFields adds the fields of t to sf. expanding holds the struct types
+// being flattened on the current path, so a type that embeds itself, directly
+// or through others, is expanded only once.
+func collectFields(t reflect.Type, index []int, expanding []reflect.Type, sf *structFields) {
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if !f.IsExported() && !f.Anonymous {
@@ -113,26 +116,16 @@ func collectFields(t reflect.Type, index []int, sf *structFields) {
 		copy(fi.index, index)
 		fi.index[len(index)] = i
 
-		if f.Anonymous && fi.name == "" && !fi.inline {
-			ft := f.Type
-			if ft.Kind() == reflect.Pointer {
-				ft = ft.Elem()
+		if ft, ok := flattened(f, fi); ok {
+			if !slices.Contains(expanding, ft) {
+				collectFields(ft, fi.index, append(expanding, ft), sf)
 			}
-			if ft.Kind() == reflect.Struct {
-				collectFields(ft, fi.index, sf)
-				continue
-			}
+			continue
 		}
-
-		if fi.inline {
-			ft := f.Type
-			if ft.Kind() == reflect.Pointer {
-				ft = ft.Elem()
-			}
-			if ft.Kind() == reflect.Struct {
-				collectFields(ft, fi.index, sf)
-				continue
-			}
+		if !f.IsExported() {
+			// An unexported embedded field is only reachable for the
+			// exported fields of a struct it flattens, handled above.
+			continue
 		}
 		if fi.inline && f.Type.Kind() == reflect.Map {
 			sf.fields = append(sf.fields, fi)
@@ -145,10 +138,8 @@ func collectFields(t reflect.Type, index []int, sf *structFields) {
 		}
 
 		if idx, exists := sf.byName[fi.name]; exists {
-			existing := sf.fields[idx]
-			if len(fi.index) == len(existing.index) {
-				sf.conflicts = append(sf.conflicts, fi.name)
-			} else if len(fi.index) < len(existing.index) {
+			// A shallower field wins; at the same depth the first one does.
+			if len(fi.index) < len(sf.fields[idx].index) {
 				sf.fields[idx] = fi
 			}
 			continue
@@ -157,4 +148,17 @@ func collectFields(t reflect.Type, index []int, sf *structFields) {
 		sf.fields = append(sf.fields, fi)
 		sf.byName[fi.name] = len(sf.fields) - 1
 	}
+}
+
+// flattened returns the struct type whose fields f merges into its parent:
+// an untagged embedded struct or a struct tagged inline, or a pointer to one.
+func flattened(f reflect.StructField, fi fieldInfo) (reflect.Type, bool) {
+	if !fi.inline && (!f.Anonymous || fi.name != "") {
+		return nil, false
+	}
+	ft := f.Type
+	if ft.Kind() == reflect.Pointer {
+		ft = ft.Elem()
+	}
+	return ft, ft.Kind() == reflect.Struct
 }

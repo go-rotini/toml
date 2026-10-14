@@ -2,6 +2,8 @@ package toml
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -1675,5 +1677,207 @@ func TestParseArrayWithTrailingCommaLong(t *testing.T) {
 	}
 	if len(val.Children) != 5 {
 		t.Errorf("got %d children, want 5", len(val.Children))
+	}
+}
+
+func TestParseDeepNestingRejected(t *testing.T) {
+	const n = 1_000_000
+	docs := map[string]string{
+		"arrays": "a = " + strings.Repeat("[", n) + strings.Repeat("]", n) + "\n",
+		"inline": "a = " + strings.Repeat("{b=", n) + "1" + strings.Repeat("}", n) + "\n",
+		"dotted": strings.Repeat("a.", n) + "a = 1\n",
+		"header": "[" + strings.Repeat("a.", n) + "a]\n",
+	}
+	for name, doc := range docs {
+		t.Run(name, func(t *testing.T) {
+			data := []byte(doc)
+			if _, err := Parse(data); !errors.Is(err, ErrSyntax) {
+				t.Errorf("Parse: err = %v, want SyntaxError", err)
+			}
+			if Valid(data) {
+				t.Error("Valid = true, want false")
+			}
+			var m map[string]any
+			if err := UnmarshalWithOptions(data, &m, WithMaxDepth(0)); !errors.Is(err, ErrSyntax) {
+				t.Errorf("Unmarshal without a depth limit: err = %v, want SyntaxError", err)
+			}
+		})
+	}
+}
+
+func TestParseMaxDepthCountsArraysAndInlineTables(t *testing.T) {
+	deepInline := "a = " + strings.Repeat("{b=", 200) + "1" + strings.Repeat("}", 200) + "\n"
+	var m map[string]any
+	if err := Unmarshal([]byte(deepInline), &m); !errors.Is(err, ErrSyntax) {
+		t.Errorf("inline tables 200 deep with the default limit: err = %v, want SyntaxError", err)
+	}
+	if !Valid([]byte(deepInline)) {
+		t.Error("Valid rejected inline tables 200 deep")
+	}
+
+	cases := []struct {
+		doc   string
+		limit int
+		ok    bool
+	}{
+		{"a = 1\n", 1, true},
+		{"a = [1]\n", 1, false},
+		{"a = [1]\n", 2, true},
+		{"a = [[1]]\n", 2, false},
+		{"a = {b = 1}\n", 2, true},
+		{"a = {b = {c = 1}}\n", 2, false},
+		{"a = {b.c = 1}\n", 2, false},
+		{"a.b = 1\n", 2, true},
+		{"a.b.c = 1\n", 2, false},
+		{"[a]\nb = [1]\n", 2, false},
+		{"[a]\nb = [1]\n", 3, true},
+		{"[[a]]\n", 1, false},
+		{"[[a]]\n", 2, true},
+	}
+	for _, c := range cases {
+		var m map[string]any
+		err := UnmarshalWithOptions([]byte(c.doc), &m, WithMaxDepth(c.limit))
+		if (err == nil) != c.ok {
+			t.Errorf("%q with WithMaxDepth(%d): err = %v, want ok=%v", c.doc, c.limit, err, c.ok)
+		}
+	}
+}
+
+// TestParseLinearInKeys checks the property that keeps parsing linear in the
+// number of keys: every key lookup is either a scan of at most indexThreshold
+// children or a map hit. It counts structure instead of timing, so it holds
+// under the race detector and on a loaded machine.
+func TestParseLinearInKeys(t *testing.T) {
+	const n = 5000
+	var flat, inline, tables, dotted strings.Builder
+	inline.WriteString("a = {")
+	for i := range n {
+		fmt.Fprintf(&flat, "k%d = %d\n", i, i)
+		if i > 0 {
+			inline.WriteString(", ")
+		}
+		fmt.Fprintf(&inline, "k%d = %d", i, i)
+		fmt.Fprintf(&tables, "[t%d]\nx = 1\n", i)
+		fmt.Fprintf(&dotted, "a.k%d = %d\n", i, i)
+	}
+	inline.WriteString("}\n")
+	for name, doc := range map[string]string{
+		"flat": flat.String(), "inline": inline.String(),
+		"tables": tables.String(), "dotted": dotted.String(),
+	} {
+		_, root, err := parseDocument([]byte(doc), 0, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var keyed int
+		var check func(*node)
+		check = func(nd *node) {
+			k := 0
+			for _, c := range nd.children {
+				if len(c.key) > 0 {
+					k++
+					if nd.index != nil && nd.index[c.key[0]] == nil {
+						t.Errorf("%s: key %q missing from its parent's index", name, c.key[0])
+					}
+				}
+				check(c)
+			}
+			keyed += k
+			if k > indexThreshold && nd.index == nil {
+				t.Errorf("%s: node with %d keyed children has no index", name, k)
+			}
+		}
+		check(root)
+		if keyed < n {
+			t.Errorf("%s: found %d keyed nodes, want at least %d", name, keyed, n)
+		}
+	}
+}
+
+func TestParseArrayTableEntriesStartClean(t *testing.T) {
+	valid := []struct {
+		doc  string
+		want map[string]any
+	}{
+		{"[[arr]]\na = [1]\n[[arr]]\n[[arr.a]]\nx = 1\n",
+			map[string]any{"arr": []any{
+				map[string]any{"a": []any{int64(1)}},
+				map[string]any{"a": []any{map[string]any{"x": int64(1)}}},
+			}}},
+		{"[[arr]]\na = {x = 1}\n[[arr]]\n[arr.a]\nx = 2\n",
+			map[string]any{"arr": []any{
+				map[string]any{"a": map[string]any{"x": int64(1)}},
+				map[string]any{"a": map[string]any{"x": int64(2)}},
+			}}},
+		{"[[arr]]\n[[arr.sub]]\n[[arr]]\n[arr.sub]\nx = 1\n",
+			map[string]any{"arr": []any{
+				map[string]any{"sub": []any{map[string]any{}}},
+				map[string]any{"sub": map[string]any{"x": int64(1)}},
+			}}},
+		{"[[arr]]\n[arr.t]\n[[arr]]\n[[arr.t]]\n",
+			map[string]any{"arr": []any{
+				map[string]any{"t": map[string]any{}},
+				map[string]any{"t": []any{map[string]any{}}},
+			}}},
+		{"[[arr]]\na.b = 1\n[[arr]]\n[[arr.a]]\n",
+			map[string]any{"arr": []any{
+				map[string]any{"a": map[string]any{"b": int64(1)}},
+				map[string]any{"a": []any{map[string]any{}}},
+			}}},
+	}
+	for _, c := range valid {
+		var m map[string]any
+		if err := Unmarshal([]byte(c.doc), &m); err != nil {
+			t.Errorf("%q: %v", c.doc, err)
+			continue
+		}
+		if !reflect.DeepEqual(m, c.want) {
+			t.Errorf("%q:\n got %v\nwant %v", c.doc, m, c.want)
+		}
+	}
+
+	invalid := []string{
+		"[[arr]]\na.0 = 0\n[[arr]]\na = 0\na.0 = 0\n",
+		"[[arr]]\nx = 1\n[[arr]]\nx = 1\nx = 2\n",
+		"[[arr]]\n[arr.t]\n[[arr]]\n[arr.t]\n[arr.t]\n",
+	}
+	for _, doc := range invalid {
+		if Valid([]byte(doc)) {
+			t.Errorf("Valid(%q) = true, want false", doc)
+		}
+	}
+}
+
+func TestParseNulKeyIsNotAPathSeparator(t *testing.T) {
+	var m map[string]any
+	if err := Unmarshal([]byte("\"a\\u0000b\" = 1\na.b = 2\n"), &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	want := map[string]any{"a\x00b": int64(1), "a": map[string]any{"b": int64(2)}}
+	if !reflect.DeepEqual(m, want) {
+		t.Errorf("got %v, want %v", m, want)
+	}
+
+	_, err := Parse([]byte("t = {a.b = 1, a.b = 2}\n"))
+	var dup *DuplicateKeyError
+	if !errors.As(err, &dup) || dup.Key != "a.b" {
+		t.Errorf("err = %v, want duplicate key \"a.b\"", err)
+	}
+}
+
+func TestParseHeaderAfterDottedKeyOnImpliedTable(t *testing.T) {
+	_, err := Parse([]byte("[a.b.c]\n[a]\nb.d = 1\n[a.b]\n"))
+	var dup *DuplicateKeyError
+	if !errors.As(err, &dup) || dup.Key != "a.b" {
+		t.Errorf("header for a table extended by dotted keys: err = %v, want DuplicateKeyError for a.b", err)
+	}
+	for _, doc := range []string{
+		"[a.b.c]\n[a]\nb.d = 1\n[a.b.e]\n",
+		"[a.b.c]\n[a]\nb.d = 1\nb.e = 2\n",
+		"[a.b.c]\n[a.b]\n[a]\nx = 1\n",
+	} {
+		if _, err := Parse([]byte(doc)); err != nil {
+			t.Errorf("%q: %v", doc, err)
+		}
 	}
 }

@@ -7,7 +7,8 @@ import (
 	"io"
 )
 
-// Marshal encodes v as TOML. The top-level value must be a struct or map.
+// Marshal encodes v as TOML. v must be a struct or map, or a pointer to one;
+// otherwise Marshal returns [ErrMarshalTop].
 func Marshal(v any) ([]byte, error) {
 	return MarshalWithOptions(v)
 }
@@ -43,7 +44,8 @@ func (enc *Encoder) Encode(v any) error {
 	return enc.EncodeContext(enc.ctx, v)
 }
 
-// EncodeContext encodes v as TOML with the given context.
+// EncodeContext encodes v as TOML and writes it to the underlying writer,
+// passing ctx to [MarshalerContext] implementations.
 func (enc *Encoder) EncodeContext(ctx context.Context, v any) error {
 	e := newEncoder(enc.opts)
 	e.ctx = ctx
@@ -55,8 +57,9 @@ func (enc *Encoder) EncodeContext(ctx context.Context, v any) error {
 	return err
 }
 
-// Close flushes any buffered data. For TOML, this is a no-op since each
-// Encode call writes completely.
+// Close calls Flush on the underlying writer if it has a Flush() error
+// method; otherwise it does nothing. Each Encode call writes its whole
+// document, so the Encoder itself buffers nothing.
 func (enc *Encoder) Close() error {
 	if f, ok := enc.w.(interface{ Flush() error }); ok {
 		if err := f.Flush(); err != nil {
@@ -71,11 +74,13 @@ func (enc *Encoder) SetContext(ctx context.Context) {
 	enc.ctx = ctx
 }
 
-// RawValue is raw TOML that has not been decoded. It can be used to
-// delay decoding or to pass through a TOML value without interpreting it.
+// RawValue is the source text of a single TOML value, such as a string or
+// array literal, decoded on demand with [RawValue.Unmarshal]. The encoder and
+// decoder give it no special treatment.
 type RawValue []byte
 
-// Unmarshal decodes the raw TOML value into v.
+// Unmarshal decodes r as the value of a key named "_raw_" into v, so v is a
+// pointer to a map or to a struct with a field tagged `toml:"_raw_"`.
 func (r RawValue) Unmarshal(v any) error {
 	return Unmarshal(wrapAsValue(r), v)
 }

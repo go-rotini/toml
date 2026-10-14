@@ -2,10 +2,8 @@ package toml
 
 import (
 	"encoding/json"
-	"math"
 	"strings"
 	"testing"
-	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -211,7 +209,7 @@ func TestJSONConvertValuesMap(t *testing.T) {
 		"a": json.Number("10"),
 		"b": json.Number("2.5"),
 	}
-	result := convertJSONValues(m)
+	result, _ := convertJSONValues(m)
 	rm := result.(map[string]any)
 	if rm["a"] != int64(10) {
 		t.Errorf("a = %v (%T)", rm["a"], rm["a"])
@@ -223,7 +221,7 @@ func TestJSONConvertValuesMap(t *testing.T) {
 
 func TestJSONConvertValuesSlice(t *testing.T) {
 	s := []any{json.Number("1"), json.Number("2.0"), "hello"}
-	result := convertJSONValues(s)
+	result, _ := convertJSONValues(s)
 	rs := result.([]any)
 	if rs[0] != int64(1) {
 		t.Errorf("[0] = %v (%T)", rs[0], rs[0])
@@ -237,166 +235,53 @@ func TestJSONConvertValuesSlice(t *testing.T) {
 }
 
 func TestJSONConvertValuesJsonNumberInt(t *testing.T) {
-	v := convertJSONValues(json.Number("42"))
+	v, _ := convertJSONValues(json.Number("42"))
 	if v != int64(42) {
 		t.Errorf("got %v (%T), want int64(42)", v, v)
 	}
 }
 
 func TestJSONConvertValuesJsonNumberFloat(t *testing.T) {
-	v := convertJSONValues(json.Number("3.14"))
+	v, _ := convertJSONValues(json.Number("3.14"))
 	if v != 3.14 {
 		t.Errorf("got %v (%T), want 3.14", v, v)
 	}
 }
 
 func TestJSONConvertValuesJsonNumberExponent(t *testing.T) {
-	v := convertJSONValues(json.Number("1E3"))
+	v, _ := convertJSONValues(json.Number("1E3"))
 	if v != float64(1000) {
 		t.Errorf("got %v (%T), want 1000.0", v, v)
 	}
 }
 
-func TestJSONConvertValuesJsonNumberStringFallback(t *testing.T) {
-	// A number that can't parse as int or float falls back to string.
-	v := convertJSONValues(json.Number("not_a_number"))
-	if _, ok := v.(string); !ok {
-		t.Errorf("got %v (%T), want string", v, v)
+func TestJSONConvertValuesNumberOutOfRange(t *testing.T) {
+	for _, n := range []string{"12345678901234567890", "-9223372036854775809", "1e999"} {
+		if _, err := convertJSONValues(json.Number(n)); err == nil {
+			t.Errorf("%s: want an error", n)
+		}
+	}
+}
+
+func TestJSONToJSONNonFinite(t *testing.T) {
+	for _, doc := range []string{"a = nan\n", "[t]\nb = [1.0, -inf]\n"} {
+		_, err := ToJSON([]byte(doc))
+		if err == nil || !strings.Contains(err.Error(), "key") {
+			t.Errorf("%q: err = %v, want an error naming the key", doc, err)
+		}
 	}
 }
 
 func TestJSONConvertValuesPassthrough(t *testing.T) {
 	// Non-map, non-slice, non-json.Number values pass through unchanged.
-	if v := convertJSONValues(true); v != true {
+	if v, _ := convertJSONValues(true); v != true {
 		t.Errorf("bool: %v", v)
 	}
-	if v := convertJSONValues("str"); v != "str" {
+	if v, _ := convertJSONValues("str"); v != "str" {
 		t.Errorf("string: %v", v)
 	}
-	if v := convertJSONValues(nil); v != nil {
+	if v, _ := convertJSONValues(nil); v != nil {
 		t.Errorf("nil: %v", v)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// marshalJSONValue
-// ---------------------------------------------------------------------------
-
-func TestJSONMarshalValueNil(t *testing.T) {
-	if got := marshalJSONValue(nil); got != `""` {
-		t.Errorf("nil: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueString(t *testing.T) {
-	if got := marshalJSONValue("hello"); got != `"hello"` {
-		t.Errorf("string: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueStringWithQuotes(t *testing.T) {
-	got := marshalJSONValue(`say "hi"`)
-	if !strings.Contains(got, `\"hi\"`) {
-		t.Errorf("expected escaped quotes: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueBoolTrue(t *testing.T) {
-	if got := marshalJSONValue(true); got != "true" {
-		t.Errorf("true: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueBoolFalse(t *testing.T) {
-	if got := marshalJSONValue(false); got != "false" {
-		t.Errorf("false: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueInt64(t *testing.T) {
-	if got := marshalJSONValue(int64(99)); got != "99" {
-		t.Errorf("int64: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueInt64Negative(t *testing.T) {
-	if got := marshalJSONValue(int64(-42)); got != "-42" {
-		t.Errorf("int64 neg: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueFloat64(t *testing.T) {
-	got := marshalJSONValue(float64(2.718))
-	if got != "2.718" {
-		t.Errorf("float64: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueFloat64Inf(t *testing.T) {
-	if got := marshalJSONValue(math.Inf(1)); got != `"inf"` {
-		t.Errorf("+inf: got %q", got)
-	}
-	if got := marshalJSONValue(math.Inf(-1)); got != `"-inf"` {
-		t.Errorf("-inf: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueFloat64NaN(t *testing.T) {
-	if got := marshalJSONValue(math.NaN()); got != `"nan"` {
-		t.Errorf("nan: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueTime(t *testing.T) {
-	tm := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
-	got := marshalJSONValue(tm)
-	if !strings.Contains(got, "2024") || !strings.Contains(got, "06-15") {
-		t.Errorf("time: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueLocalDate(t *testing.T) {
-	d := LocalDate{Year: 2024, Month: time.March, Day: 5}
-	got := marshalJSONValue(d)
-	if got != `"2024-03-05"` {
-		t.Errorf("LocalDate: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueLocalTime(t *testing.T) {
-	lt := LocalTime{Hour: 14, Minute: 30, Second: 0}
-	got := marshalJSONValue(lt)
-	if got != `"14:30:00"` {
-		t.Errorf("LocalTime: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueLocalDateTime(t *testing.T) {
-	dt := LocalDateTime{
-		LocalDate: LocalDate{Year: 2024, Month: time.January, Day: 1},
-		LocalTime: LocalTime{Hour: 12, Minute: 0, Second: 0},
-	}
-	got := marshalJSONValue(dt)
-	if got != `"2024-01-01T12:00:00"` {
-		t.Errorf("LocalDateTime: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueFallback(t *testing.T) {
-	// A struct that json.Marshal can handle.
-	type inner struct {
-		X int `json:"x"`
-	}
-	got := marshalJSONValue(inner{X: 5})
-	if got != `{"x":5}` {
-		t.Errorf("fallback struct: got %q", got)
-	}
-}
-
-func TestJSONMarshalValueFallbackSlice(t *testing.T) {
-	got := marshalJSONValue([]int{1, 2, 3})
-	if got != `[1,2,3]` {
-		t.Errorf("fallback slice: got %q", got)
 	}
 }
 
@@ -503,7 +388,8 @@ func TestJSONConvertValuesNestedMap(t *testing.T) {
 			"inner": json.Number("99"),
 		},
 	}
-	result := convertJSONValues(m).(map[string]any)
+	r, _ := convertJSONValues(m)
+	result := r.(map[string]any)
 	outer := result["outer"].(map[string]any)
 	if outer["inner"] != int64(99) {
 		t.Errorf("nested inner = %v (%T)", outer["inner"], outer["inner"])
@@ -514,7 +400,8 @@ func TestJSONConvertValuesNestedSlice(t *testing.T) {
 	s := []any{
 		[]any{json.Number("1"), json.Number("2")},
 	}
-	result := convertJSONValues(s).([]any)
+	r, _ := convertJSONValues(s)
+	result := r.([]any)
 	inner := result[0].([]any)
 	if inner[0] != int64(1) || inner[1] != int64(2) {
 		t.Errorf("nested slice = %v", inner)

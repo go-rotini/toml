@@ -3,6 +3,7 @@ package toml
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParseTagEmpty(t *testing.T) {
@@ -316,19 +317,9 @@ func TestGetStructFieldsConflictDetection(t *testing.T) {
 	}
 	sf := getStructFields(reflect.TypeOf(Config{}))
 
-	// Both A.Name and B.Name have the same depth, so "name" should be a conflict
-	if len(sf.conflicts) == 0 {
-		t.Error("expected conflict for 'name', got none")
-	}
-	found := false
-	for _, c := range sf.conflicts {
-		if c == "name" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("conflicts = %v, want 'name' in list", sf.conflicts)
+	// A.Name and B.Name have the same depth, so the first one wins.
+	if got := sf.fields[sf.byName["name"]].index; !reflect.DeepEqual(got, []int{0, 0}) {
+		t.Errorf("name index = %v, want A.Name [0 0]", got)
 	}
 }
 
@@ -488,4 +479,43 @@ func TestGetStructFieldsInlineMap(t *testing.T) {
 	// It may or may not inline into the map depending on map handling path.
 	// Just verify "known" is there and there's no panic.
 	_ = found
+}
+
+type SelfEmbed struct {
+	*SelfEmbed
+	V int
+}
+
+type MutualA struct {
+	*MutualB
+	A int
+}
+
+type MutualB struct {
+	*MutualA
+	B int
+}
+
+func TestSelfEmbeddingTypes(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		out, err := Marshal(SelfEmbed{V: 1})
+		if err != nil || string(out) != "v = 1\n" {
+			t.Errorf("Marshal = %q, %v", out, err)
+		}
+		var s SelfEmbed
+		if err := Unmarshal([]byte("v = 2\n"), &s); err != nil || s.V != 2 {
+			t.Errorf("Unmarshal = %+v, %v", s, err)
+		}
+		var m MutualA
+		if err := Unmarshal([]byte("a = 1\nb = 2\n"), &m); err != nil || m.A != 1 || m.MutualB == nil || m.B != 2 {
+			t.Errorf("Unmarshal mutual = %+v, %v", m, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("collecting fields of a self-embedding type did not return")
+	}
 }

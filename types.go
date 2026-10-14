@@ -53,7 +53,8 @@ func (d LocalDate) AsTime(loc *time.Location) time.Time {
 }
 
 // LocalTime represents a time of day without a date or timezone, as
-// specified in TOML's local time type (e.g., 07:32:00).
+// specified in TOML's local time type (e.g., 07:32:00). Second is 60 for a
+// leap second.
 type LocalTime struct {
 	Hour       int
 	Minute     int
@@ -84,13 +85,16 @@ func (t *LocalTime) UnmarshalText(data []byte) error {
 		"15:04:05",
 		"15:04",
 	}
-	s := string(data)
+	s, leap := cutLeapSecond(string(data), 6)
 	for _, layout := range layouts {
 		parsed, err := time.Parse(layout, s)
 		if err == nil {
 			t.Hour = parsed.Hour()
 			t.Minute = parsed.Minute()
 			t.Second = parsed.Second()
+			if leap {
+				t.Second = 60
+			}
 			t.Nanosecond = parsed.Nanosecond()
 			return nil
 		}
@@ -125,7 +129,7 @@ func (dt *LocalDateTime) UnmarshalText(data []byte) error {
 		"2006-01-02 15:04:05",
 		"2006-01-02 15:04",
 	}
-	s := string(data)
+	s, leap := cutLeapSecond(string(data), 17)
 	for _, layout := range layouts {
 		t, err := time.Parse(layout, s)
 		if err == nil {
@@ -135,6 +139,9 @@ func (dt *LocalDateTime) UnmarshalText(data []byte) error {
 			dt.Hour = t.Hour()
 			dt.Minute = t.Minute()
 			dt.Second = t.Second()
+			if leap {
+				dt.Second = 60
+			}
 			dt.Nanosecond = t.Nanosecond()
 			return nil
 		}

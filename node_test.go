@@ -1,6 +1,7 @@
 package toml
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -881,5 +882,72 @@ func TestNodeExportNodePreservesChildOrder(t *testing.T) {
 		if keys[i] != want[i] {
 			t.Errorf("Children[%d].Key = %q, want %q", i, keys[i], want[i])
 		}
+	}
+}
+
+func TestParseFootComments(t *testing.T) {
+	f, err := Parse([]byte("# file\n\na = 1\n# root foot\n\n# t head\n[t]\nx = 1\n# t foot\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := f.Root
+	if root.FootComment != " root foot" {
+		t.Errorf("root foot = %q", root.FootComment)
+	}
+	if root.Children[0].HeadComment != " file" {
+		t.Errorf("a head = %q", root.Children[0].HeadComment)
+	}
+	tbl := root.Children[1]
+	if tbl.HeadComment != " t head" || tbl.FootComment != " t foot" {
+		t.Errorf("t head = %q foot = %q", tbl.HeadComment, tbl.FootComment)
+	}
+	if f.Warnings != nil {
+		t.Errorf("Warnings = %v", f.Warnings)
+	}
+}
+
+func TestNodeToBytesComments(t *testing.T) {
+	src := "# a head\na = 1 # a line\n# root foot\n\n# t head\n[t] # t line\nx = 1\n# t foot\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := NodeToBytes(f.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# a head\na = 1 # a line\n# root foot\n\n# t head\n[t] # t line\nx = 1\n# t foot\n"
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestNodeToBytesDottedKeyAndOrder(t *testing.T) {
+	kv := &Node{Kind: KeyValueNode, Key: []string{"a", "b c"}, Children: []*Node{{Kind: IntegerNode, Value: "1"}}}
+	out, err := NodeToBytes(&Node{Kind: TableNode, Children: []*Node{kv}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "a.\"b c\" = 1\n" {
+		t.Errorf("got %q", out)
+	}
+
+	f, err := Parse([]byte("[t]\nx.y = 1\nz = 2\n\n[[p]]\nn = 1\n[p.sub]\nq = 3\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = NodeToBytes(f.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want any
+	if err := Unmarshal(out, &got); err != nil {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	if err := Unmarshal([]byte("[t]\nx.y = 1\nz = 2\n\n[[p]]\nn = 1\n[p.sub]\nq = 3\n"), &want); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("round trip = %v, want %v\n%s", got, want, out)
 	}
 }

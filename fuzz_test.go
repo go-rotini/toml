@@ -145,3 +145,102 @@ func FuzzSpans(f *testing.F) {
 		checkSpans(t, data, file.Root)
 	})
 }
+
+// FuzzNodeRoundTrip parses a document, writes the tree back with NodeToBytes,
+// and checks the output decodes to the same values as the input.
+func FuzzNodeRoundTrip(f *testing.F) {
+	f.Add([]byte(benchConfig))
+	f.Add([]byte(spanDoc))
+	f.Add([]byte("a = \"\"\"x\\ry\"\"\"\nb = '''l\nm'''\n[[t]]\nk.v = [1, {x = 'y'}]\n[[t]]\n[t.s]\n"))
+	f.Add([]byte("[[arr]]\na = [1]\n[[arr]]\n[[arr.a]]\nx = 1\n"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var want map[string]any
+		if err := UnmarshalWithOptions(data, &want, WithMaxDepth(0)); err != nil {
+			return
+		}
+		file, err := Parse(data)
+		if err != nil {
+			t.Fatalf("Unmarshal accepted the input but Parse failed: %v", err)
+		}
+		out, err := NodeToBytes(file.Root)
+		if err != nil {
+			t.Fatalf("NodeToBytes: %v", err)
+		}
+		var got map[string]any
+		if err := UnmarshalWithOptions(out, &got, WithMaxDepth(0)); err != nil {
+			t.Fatalf("output does not decode: %v\ninput:  %q\noutput: %q", err, data, out)
+		}
+		if !roundTripEqual(want, got) {
+			t.Fatalf("round-trip mismatch\ninput:  %q\noutput: %q", data, out)
+		}
+	})
+}
+
+type fuzzStruct struct {
+	S   string            `toml:"s"`
+	ML  string            `toml:"ml,multiline"`
+	MLL string            `toml:"mll,multiline,literal"`
+	L   string            `toml:"l,literal"`
+	I   int64             `toml:"i"`
+	H   int64             `toml:"h,hex"`
+	O   int32             `toml:"o,octal"`
+	B   int16             `toml:"b,binary"`
+	U   uint32            `toml:"u"`
+	F   float64           `toml:"f"`
+	F32 float32           `toml:"f32"`
+	T   bool              `toml:"t"`
+	A   []string          `toml:"a"`
+	M   map[string]string `toml:"m"`
+	N   struct {
+		X string `toml:"x"`
+	} `toml:"n"`
+	R []struct {
+		Y int64 `toml:"y"`
+	} `toml:"r"`
+}
+
+// FuzzStructRoundTrip checks that arbitrary field values, written with every
+// string and integer style, survive Marshal and Unmarshal.
+func FuzzStructRoundTrip(f *testing.F) {
+	f.Add("plain", "key", int64(1), 1.5, true)
+	f.Add("a\r\nb\"\"\"c", "a.b", int64(-31), math.Inf(-1), false)
+	f.Add("it's '''\x01", "", int64(math.MinInt64), 1e300, true)
+	f.Add("\x9a\\", "\"", int64(math.MaxInt64), math.NaN(), false)
+
+	f.Fuzz(func(t *testing.T, s, key string, i int64, fl float64, b bool) {
+		in := fuzzStruct{
+			S: s, ML: s, MLL: s, L: s,
+			I: i, H: i, O: int32(i), B: int16(i), U: uint32(i),
+			F: fl, F32: float32(fl), T: b,
+			A: []string{s, key},
+			M: map[string]string{key: s},
+		}
+		in.N.X = s
+		in.R = append(in.R, struct {
+			Y int64 `toml:"y"`
+		}{i})
+		out, err := Marshal(in)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		var got fuzzStruct
+		if err := Unmarshal(out, &got); err != nil {
+			t.Fatalf("Unmarshal: %v\n%s", err, out)
+		}
+		want := in
+		valid := string([]rune(s))
+		want.S, want.ML, want.MLL, want.L, want.N.X = valid, valid, valid, valid, valid
+		want.A = []string{valid, string([]rune(key))}
+		want.M = map[string]string{string([]rune(key)): valid}
+		if math.IsNaN(fl) {
+			if !math.IsNaN(got.F) || !math.IsNaN(float64(got.F32)) {
+				t.Fatalf("NaN lost: %v, %v", got.F, got.F32)
+			}
+			got.F, got.F32, want.F, want.F32 = 0, 0, 0, 0
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("round-trip mismatch\n got %+v\nwant %+v\n%s", got, want, out)
+		}
+	})
+}

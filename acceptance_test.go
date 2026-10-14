@@ -1852,7 +1852,7 @@ with_escapes = "\"quoted\" \\ slash"
 
 func TestAcceptanceJSONNumbers(t *testing.T) {
 	// FromJSON with various number types triggers convertJSONValues paths.
-	jsonSrc := `{"int":42,"float":3.14,"big":12345678901234567890,"sci":1.5e10}`
+	jsonSrc := `{"int":42,"float":3.14,"sci":1.5e10}`
 	out, err := FromJSON([]byte(jsonSrc))
 	if err != nil {
 		t.Fatal(err)
@@ -3853,37 +3853,6 @@ func TestAcceptanceInternalTokenStringer(t *testing.T) {
 	}
 }
 
-func TestAcceptanceInternalMarshalJSONValue(t *testing.T) {
-	// marshalJSONValue is an internal helper that coverts decoded TOML values
-	// into JSON-safe representations. Exercising it ensures correctness for
-	// every value kind that ToJSON might emit.
-	cases := []struct {
-		in  any
-		out string
-	}{
-		{nil, `""`},
-		{"hello", `"hello"`},
-		{true, "true"},
-		{false, "false"},
-		{int64(42), "42"},
-		{int64(-7), "-7"},
-		{float64(2.5), `2.5`},
-		{math.Inf(1), `"inf"`},
-		{math.Inf(-1), `"-inf"`},
-		{math.NaN(), `"nan"`},
-		{time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC), `"2024-01-15T10:30:00Z"`},
-		{LocalDate{Year: 2024, Month: 1, Day: 15}, `"2024-01-15"`},
-		{LocalTime{Hour: 10, Minute: 30}, `"10:30:00"`},
-		{LocalDateTime{LocalDate: LocalDate{Year: 2024, Month: 1, Day: 15}}, `"2024-01-15T00:00:00"`},
-	}
-	for _, tc := range cases {
-		got := marshalJSONValue(tc.in)
-		if got != tc.out {
-			t.Errorf("marshalJSONValue(%v) = %q, want %q", tc.in, got, tc.out)
-		}
-	}
-}
-
 func TestAcceptanceInternalEncodeInlineTable(t *testing.T) {
 	// encodeInlineTable is exercised when WithInlineTable is used in conjunction
 	// with a struct value reaching encodeValue. Force it via the encoder.
@@ -5231,7 +5200,7 @@ func TestAcceptanceIntegerLimitValues(t *testing.T) {
 		`a = -0`,
 		`a = 9223372036854775807`,  // max int64
 		`a = -9223372036854775808`, // min int64
-		`a = 0xFFFFFFFFFFFFFFFF`,   // max uint64
+		`a = 0x7FFFFFFFFFFFFFFF`,   // max int64 in hex
 		`a = 0o0`,
 		`a = 0b0`,
 	}

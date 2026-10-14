@@ -407,3 +407,36 @@ func TestFormatErrorColumnPointerPosition(t *testing.T) {
 	}
 	_ = expected
 }
+
+func TestErrorPositionsAndWording(t *testing.T) {
+	_, err := Parse([]byte("a = 1\nb = 2\nc = 3\nd = 4\rx\n"))
+	var syn *SyntaxError
+	if !errors.As(err, &syn) || syn.Pos.Line != 4 || syn.Pos.Column != 6 || syn.Pos.Offset != 23 {
+		t.Errorf("bare CR: err = %v (%+v), want line 4, column 6, offset 23", err, syn)
+	}
+
+	_, err = Parse([]byte("[t]\n  name = 1\n  name = 2\n"))
+	var dup *DuplicateKeyError
+	if !errors.As(err, &dup) || dup.Pos.Line != 3 || dup.Pos.Column != 3 {
+		t.Errorf("duplicate: err = %v (%+v), want line 3, column 3 where the key begins", err, dup)
+	}
+
+	_, err = Parse([]byte("a = \n"))
+	if !errors.As(err, &syn) || syn.Message != "missing value" || syn.Token != "end of line" || strings.Contains(err.Error(), "NEWLINE") {
+		t.Errorf("missing value: err = %v", err)
+	}
+
+	var v struct {
+		Server struct {
+			Port  int   `toml:"port"`
+			Ports []int `toml:"ports"`
+		} `toml:"server"`
+	}
+	err = Unmarshal([]byte("[server]\nport = \"x\"\nports = [1, \"y\"]\n"), &v)
+	var te *TypeError
+	if !errors.As(err, &te) || len(te.Errors) != 2 ||
+		!strings.HasPrefix(te.Errors[0], `line 2: key "server.port": `) ||
+		!strings.HasPrefix(te.Errors[1], `line 3: key "server.ports[1]": `) {
+		t.Errorf("type errors = %v, want each with its line and key path", err)
+	}
+}

@@ -20,20 +20,38 @@
 //	}
 //
 // The tag format is "keyname,opts" where opts is a comma-separated list of:
-//   - omitempty: omit the field if it has its zero value
-//   - omitzero: omit the field if it has its zero value (explicit alias)
-//   - inline: encode the struct or map as an inline table
-//   - multiline: encode strings as multi-line basic strings
+//   - omitempty: omit the field if it is a zero value or an empty slice or map
+//   - omitzero: same as omitempty
+//   - inline: on a struct field, merge its fields into the parent table as
+//     an embedded struct's are; on a map field, encode it as an inline table
+//   - multiline: encode strings as multi-line basic strings (multi-line
+//     literal strings when combined with literal)
 //   - literal: encode strings as literal (single-quoted) strings
-//   - commented: encode the field as a commented-out line
+//   - commented: encode the field, a table included, as commented-out lines
 //   - hex: encode integers in hexadecimal (0x) format
 //   - octal: encode integers in octal (0o) format
 //   - binary: encode integers in binary (0b) format
-//   - required: return an error during decoding if the key is absent
-//   - default=<value>: set field to <value> during decoding if the key is absent
-//     (requires [WithDefaults]; scalar types only)
+//   - required: return an error during decoding if the key is absent, also
+//     when the table holding it is absent
+//   - default=<value>: set field to <value> during decoding if the key is
+//     absent, also when the table holding it is (requires [WithDefaults];
+//     scalar types only)
 //
-// A tag of "-" excludes the field from encoding and decoding.
+// A tag of "-" excludes the field from encoding and decoding. A field with
+// no "toml" tag uses its "json" tag, and a field with neither is keyed by its
+// lower-cased name. Decoding falls back to a case-insensitive match when no
+// field name matches a key exactly. A "comment" tag writes its text as
+// comment lines above the field when encoding.
+//
+// A string a literal string cannot hold exactly, such as one with a single
+// quote or a control character, is written as a basic string instead. A
+// negative integer tagged hex, octal or binary is written in decimal, as
+// TOML has no signed form of those.
+//
+// When two fields map to the same key, the less deeply embedded one is used;
+// at the same depth, the first. TOML has no null, so encoding leaves out
+// fields and map entries holding a nil pointer or interface, and returns an
+// error for one inside an array.
 //
 // # Custom Marshalers
 //

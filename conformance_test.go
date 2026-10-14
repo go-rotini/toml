@@ -443,3 +443,101 @@ func truncate(s string, n int) string {
 	}
 	return s
 }
+
+// TestTOMLTestSuiteEncoder runs the suite's encoder tests: each valid test's
+// expected JSON, as Go values, must Marshal to TOML that decodes back to
+// the same JSON.
+func TestTOMLTestSuiteEncoder(t *testing.T) {
+	validFiles, _ := loadTestFiles(t)
+	for _, file := range validFiles {
+		name := strings.TrimSuffix(strings.TrimPrefix(file, "valid/"), ".toml")
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			jsonPath := strings.TrimSuffix(filepath.Join(testSuiteDir, "tests", file), ".toml") + ".json"
+			jsonData, err := os.ReadFile(jsonPath)
+			if err != nil {
+				t.Skipf("cannot read %s: %v", jsonPath, err)
+			}
+			var expected any
+			if err := json.Unmarshal(jsonData, &expected); err != nil {
+				t.Fatalf("cannot parse %s: %v", jsonPath, err)
+			}
+			in, err := untagJSON(expected)
+			if err != nil {
+				t.Fatalf("%s: %v", jsonPath, err)
+			}
+			out, err := Marshal(in)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var back map[string]any
+			if err := Unmarshal(out, &back); err != nil {
+				t.Fatalf("Unmarshal of encoder output: %v\n%s", err, out)
+			}
+			if !compareTaggedJSON(t, expected, toTaggedJSON(back)) {
+				t.Logf("encoder output:\n%s", out)
+			}
+		})
+	}
+}
+
+// untagJSON turns the suite's tagged JSON into the Go values decoding
+// produces.
+func untagJSON(v any) (any, error) {
+	switch x := v.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			u, err := untagJSON(e)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = u
+		}
+		return out, nil
+	case map[string]any:
+		if typ, ok := x["type"].(string); ok && len(x) == 2 {
+			if s, ok := x["value"].(string); ok {
+				return untagScalar(typ, s)
+			}
+		}
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			u, err := untagJSON(e)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = u
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("unexpected JSON value %T", v)
+}
+
+func untagScalar(typ, s string) (any, error) {
+	switch typ {
+	case "string":
+		return s, nil
+	case "integer":
+		return strconv.ParseInt(s, 10, 64)
+	case "float":
+		return parseFloat(s)
+	case "bool":
+		return s == "true", nil
+	case "datetime":
+		return time.Parse(time.RFC3339Nano, strings.Replace(s, " ", "T", 1))
+	case "datetime-local":
+		var d LocalDateTime
+		err := d.UnmarshalText([]byte(s))
+		return d, err
+	case "date-local":
+		var d LocalDate
+		err := d.UnmarshalText([]byte(s))
+		return d, err
+	case "time-local":
+		var d LocalTime
+		err := d.UnmarshalText([]byte(s))
+		return d, err
+	}
+	return nil, fmt.Errorf("unknown type %q", typ)
+}

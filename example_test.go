@@ -380,7 +380,7 @@ func ExampleFormatError() {
 		fmt.Print(formatted)
 	}
 	// Output:
-	// toml: line 1, column 6: unexpected token NEWLINE in value
+	// toml: line 1, column 6: missing value
 	//   key =
 	//        ^
 }

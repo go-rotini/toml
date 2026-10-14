@@ -7,8 +7,10 @@ import (
 	"os"
 )
 
-// Unmarshal decodes TOML data into v. The top-level value in v must be a
-// pointer to a struct or map.
+// Unmarshal decodes TOML data into v, which must be a non-nil pointer
+// (otherwise Unmarshal returns [ErrNilPointer]) to a struct, a map with string
+// or [encoding.TextUnmarshaler] keys, or an interface value, which receives a
+// map[string]any ([MapSlice] with [WithOrderedMap]).
 func Unmarshal(data []byte, v any) error {
 	return UnmarshalWithOptions(data, v)
 }
@@ -24,23 +26,13 @@ func UnmarshalWithOptions(data []byte, v any, opts ...DecodeOption) error {
 		return ErrDocumentSize
 	}
 
-	s, err := newScanner(data)
-	if err != nil {
-		return err
-	}
-	tokens, err := s.scan()
-	if err != nil {
-		return err
-	}
-
-	p := newParser(tokens)
-	p.maxNodes = o.maxNodes
-	root, err := p.parse()
+	s, root, err := parseDocument(data, o.maxNodes, o.maxDepth)
 	if err != nil {
 		return err
 	}
 
 	d := newDecoder(o)
+	d.src = s.src
 	return d.decode(root, v)
 }
 
@@ -84,14 +76,20 @@ func (dec *Decoder) Decode(v any) error {
 	return dec.DecodeContext(dec.ctx, v)
 }
 
-// DecodeContext reads the TOML input and decodes it into v with context.
+// DecodeContext reads the TOML input and decodes it into v, passing ctx to
+// [UnmarshalerContext] implementations.
 func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 	if dec.done {
 		return io.EOF
 	}
 	dec.done = true
 
-	data, err := io.ReadAll(dec.r)
+	r := dec.r
+	if dec.opts.maxDocumentSize > 0 {
+		// One byte past the limit is enough to tell the input is too long.
+		r = io.LimitReader(r, int64(dec.opts.maxDocumentSize)+1)
+	}
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return fmt.Errorf("toml: %w", err)
 	}
@@ -100,23 +98,13 @@ func (dec *Decoder) DecodeContext(ctx context.Context, v any) error {
 		return ErrDocumentSize
 	}
 
-	sc, err := newScanner(data)
-	if err != nil {
-		return err
-	}
-	tokens, err := sc.scan()
-	if err != nil {
-		return err
-	}
-
-	p := newParser(tokens)
-	p.maxNodes = dec.opts.maxNodes
-	root, err := p.parse()
+	sc, root, err := parseDocument(data, dec.opts.maxNodes, dec.opts.maxDepth)
 	if err != nil {
 		return err
 	}
 
 	d := newDecoder(dec.opts)
+	d.src = sc.src
 	d.ctx = ctx
 	return d.decode(root, v)
 }

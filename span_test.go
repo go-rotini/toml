@@ -324,8 +324,8 @@ func TestSpanKeepsErrorPositions(t *testing.T) {
 	if !errors.As(err, &dup) {
 		t.Fatalf("err = %v, want DuplicateKeyError", err)
 	}
-	if dup.Pos.Line != 2 || dup.Pos.Column != 2 {
-		t.Errorf("Pos = %v, want 2:2 (unchanged token-end position)", dup.Pos)
+	if dup.Pos.Line != 2 || dup.Pos.Column != 1 || dup.Pos.Offset != 6 {
+		t.Errorf("Pos = %+v, want 2:1 at offset 6, where the key begins", dup.Pos)
 	}
 }
 
@@ -416,4 +416,74 @@ func TestSpanTestSuite(t *testing.T) {
 			checkLineCol(t, data, f.Root)
 		})
 	}
+}
+
+func TestSpanColumnsAcrossRuneChunks(t *testing.T) {
+	for _, size := range []int{runeChunk - 1, runeChunk, runeChunk + 1, 2 * runeChunk, 4 * runeChunk} {
+		for _, prefix := range []string{"", "é"} {
+			// s = "é…x", total size bytes, no trailing newline.
+			body := strings.Repeat("x", size-len(`s = ""`)-len(prefix))
+			doc := `s = "` + prefix + body + `"`
+			f, err := Parse([]byte(doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := f.Root.Children[0].Children[0]
+			if want := utf8.RuneCountInString(doc) + 1; v.Span.End.Column != want || v.Span.End.Offset != len(doc) {
+				t.Errorf("size %d prefix %q: End = %+v, want column %d offset %d", size, prefix, v.Span.End, want, len(doc))
+			}
+			if mid := v.Span.Start.Column; mid != 5 {
+				t.Errorf("size %d prefix %q: Start column = %d, want 5", size, prefix, mid)
+			}
+		}
+	}
+}
+
+func TestErrorOffsetsInInput(t *testing.T) {
+	const pre = "\xef\xbb\xbfa = 1\r\nb = 1\r\n"
+	for _, c := range []struct {
+		doc  string
+		want string // the input text at the error's Offset
+	}{
+		{pre + "c = @\r\n", "@\r\n"},
+		{pre + "c = 1\r\nc = 2\r\n", "c = 2\r\n"},
+		{pre + "c = 1e400\r\n", "\r\n"},
+		{pre + "c = 1\rd = 2\n", "\rd = 2\n"},
+	} {
+		var m map[string]any
+		err := Unmarshal([]byte(c.doc), &m)
+		var se *SyntaxError
+		var de *DuplicateKeyError
+		var pos Position
+		switch {
+		case errors.As(err, &se):
+			pos = se.Pos
+		case errors.As(err, &de):
+			pos = de.Pos
+		default:
+			t.Fatalf("%q: err = %v", c.doc, err)
+		}
+		if got := c.doc[pos.Offset:]; got != c.want {
+			t.Errorf("%q: %v: text at Offset %d = %q, want %q", c.doc, err, pos.Offset, got, c.want)
+		}
+	}
+
+	doc := pre + "c = 300\r\n"
+	var v struct{ C int8 }
+	var oe *OverflowError
+	if err := Unmarshal([]byte(doc), &v); !errors.As(err, &oe) || !strings.HasSuffix(doc[:oe.Pos.Offset], "300") {
+		t.Errorf("OverflowError = %v at %+v", err, oe)
+	}
+
+	// A scalar's Pos is where it ends, as is its Span.
+	f, err := Parse([]byte(pre + "[t]\r\nx = 'v'\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	Walk(f.Root, func(n *Node) bool {
+		if len(n.Children) == 0 && n.Kind != TableNode && n.Pos != n.Span.End {
+			t.Errorf("%v: Pos %+v, Span.End %+v", n, n.Pos, n.Span.End)
+		}
+		return true
+	})
 }
