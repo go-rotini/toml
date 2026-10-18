@@ -856,16 +856,27 @@ func (e *encoder) emitValue(n *node) error {
 	return nil
 }
 
-// scalarTokens maps the kinds of non-string scalar nodes to the token their
-// text must scan as.
-var scalarTokens = map[nodeKind]tokenKind{
-	nodeInteger:       tokenInteger,
-	nodeFloat:         tokenFloat,
-	nodeBoolean:       tokenBoolean,
-	nodeDateTime:      tokenOffsetDateTime,
-	nodeLocalDateTime: tokenLocalDateTime,
-	nodeLocalDate:     tokenLocalDate,
-	nodeLocalTime:     tokenLocalTime,
+// scalarToken returns the token the text of a non-string scalar node of kind
+// k must scan as, and the zero tokenKind for any other kind.
+func scalarToken(k nodeKind) tokenKind {
+	switch k {
+	case nodeInteger:
+		return tokenInteger
+	case nodeFloat:
+		return tokenFloat
+	case nodeBoolean:
+		return tokenBoolean
+	case nodeDateTime:
+		return tokenOffsetDateTime
+	case nodeLocalDateTime:
+		return tokenLocalDateTime
+	case nodeLocalDate:
+		return tokenLocalDate
+	case nodeLocalTime:
+		return tokenLocalTime
+	}
+	var zero tokenKind
+	return zero
 }
 
 // checkScalar reports an error unless n's text is exactly one TOML value of
@@ -888,7 +899,7 @@ func (e *encoder) checkScalar(n *node) error {
 	if !strings.HasPrefix(n.value, bom) && !s.atEnd() {
 		err = s.scanValue()
 	}
-	if err != nil || !s.atEnd() || len(s.tokens) != 1 || s.tokens[0].kind != scalarTokens[n.kind] {
+	if err != nil || !s.atEnd() || len(s.tokens) != 1 || s.tokens[0].kind != scalarToken(n.kind) {
 		return fmt.Errorf("%w %q", errInvalidScalar, n.value)
 	}
 	return nil

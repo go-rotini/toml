@@ -57,10 +57,10 @@ func TestDefaultDecodeOptions(t *testing.T) {
 	if opts.useOrderedMap {
 		t.Error("useOrderedMap should default to false")
 	}
-	if opts.useJSONUnmarshaler {
+	if opts.unmarshalJSON != nil {
 		t.Error("useJSONUnmarshaler should default to false")
 	}
-	if opts.applyDefaults {
+	if opts.applyDefault != nil {
 		t.Error("applyDefaults should default to false")
 	}
 	if opts.maxKeys != 0 {
@@ -203,7 +203,7 @@ func TestWithCustomMarshalerMultiple(t *testing.T) {
 func TestWithDefaults(t *testing.T) {
 	opts := defaultDecodeOptions()
 	WithDefaults()(opts)
-	if !opts.applyDefaults {
+	if !(opts.applyDefault != nil) {
 		t.Error("applyDefaults should be true")
 	}
 }
@@ -227,7 +227,7 @@ func TestWithOrderedMap(t *testing.T) {
 func TestWithJSONUnmarshaler(t *testing.T) {
 	opts := defaultDecodeOptions()
 	WithJSONUnmarshaler()(opts)
-	if !opts.useJSONUnmarshaler {
+	if opts.unmarshalJSON == nil {
 		t.Error("useJSONUnmarshaler should be true")
 	}
 }
@@ -359,7 +359,7 @@ func TestDecodeOptionComposition(t *testing.T) {
 	if !opts.strict {
 		t.Error("strict should be true")
 	}
-	if !opts.applyDefaults {
+	if !(opts.applyDefault != nil) {
 		t.Error("applyDefaults should be true")
 	}
 	if opts.maxDepth != 50 {

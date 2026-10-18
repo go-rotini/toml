@@ -220,12 +220,12 @@ func (d *decoder) decodeAbsent(sf *structFields, assigned []bool, rv reflect.Val
 				Pos:     pos,
 			}
 		}
-		if fi.hasDefault && d.opts.applyDefaults {
+		if fi.hasDefault && d.opts.applyDefault != nil {
 			fv, ok := d.field(rv, fi.index)
 			if !ok {
 				continue
 			}
-			if err := d.applyDefault(fi, fv); err != nil {
+			if err := d.opts.applyDefault(d, fi, fv); err != nil {
 				return err
 			}
 			continue
@@ -1010,9 +1010,9 @@ func (d *decoder) unmarshalCustom(n *node, rv reflect.Value) (bool, error) {
 		return true, nil
 	}
 
-	if d.opts.useJSONUnmarshaler && !isScalarStruct(rv.Type()) && rv.CanAddr() && rv.Addr().CanInterface() {
+	if d.opts.unmarshalJSON != nil && !isScalarStruct(rv.Type()) && rv.CanAddr() && rv.Addr().CanInterface() {
 		if u, ok := reflect.TypeAssert[json.Unmarshaler](rv.Addr()); ok {
-			return true, d.unmarshalJSON(n, u)
+			return true, d.opts.unmarshalJSON(d, n, u)
 		}
 	}
 	return false, nil
@@ -1035,7 +1035,7 @@ func (d *decoder) mayHook(rv reflect.Value) bool {
 	return pt.Implements(reflect.TypeFor[UnmarshalerContext]()) ||
 		pt.Implements(reflect.TypeFor[Unmarshaler]()) ||
 		pt.Implements(reflect.TypeFor[BytesUnmarshaler]()) ||
-		d.opts.useJSONUnmarshaler && pt.Implements(reflect.TypeFor[json.Unmarshaler]())
+		d.opts.unmarshalJSON != nil && pt.Implements(reflect.TypeFor[json.Unmarshaler]())
 }
 
 // unmarshalFunc returns the callback handed to an [Unmarshaler]. The value

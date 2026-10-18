@@ -1,6 +1,7 @@
 package toml
 
 import (
+	"encoding/json"
 	"reflect"
 	"time"
 )
@@ -136,8 +137,8 @@ type StructValidator interface {
 type decoderOptions struct {
 	strict             bool
 	useOrderedMap      bool
-	useJSONUnmarshaler bool
-	applyDefaults      bool
+	unmarshalJSON      func(*decoder, *node, json.Unmarshaler) error  // (*decoder).unmarshalJSON, set by WithJSONUnmarshaler, so a decoder without it doesn't link encoding/json
+	applyDefault       func(*decoder, fieldInfo, reflect.Value) error // set by WithDefaults; nil leaves default tags unread and unlinked
 	maxDepth           int
 	maxKeys            int
 	maxDocumentSize    int
@@ -162,7 +163,7 @@ func defaultDecodeOptions() *decoderOptions {
 // other type, returns a [DefaultError]. Without this option, default tags are
 // ignored.
 func WithDefaults() DecodeOption {
-	return func(o *decoderOptions) { o.applyDefaults = true }
+	return func(o *decoderOptions) { o.applyDefault = (*decoder).applyDefault }
 }
 
 // WithStrict causes decoding to return an [UnknownFieldError] if a TOML key
@@ -184,7 +185,7 @@ func WithOrderedMap() DecodeOption {
 // scalar, or [WithCustomUnmarshaler] function. [time.Time], [math/big.Int],
 // [math/big.Float] and the local date and time types keep their TOML decoding.
 func WithJSONUnmarshaler() DecodeOption {
-	return func(o *decoderOptions) { o.useJSONUnmarshaler = true }
+	return func(o *decoderOptions) { o.unmarshalJSON = (*decoder).unmarshalJSON }
 }
 
 // WithMaxDepth limits how deeply tables, inline tables and arrays may nest,
